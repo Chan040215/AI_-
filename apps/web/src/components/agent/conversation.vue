@@ -1,74 +1,87 @@
 <template>
   <div class="agentConversation">
-    <chat-list class="messageList" :clearHistory="false">
-      <chat-item v-if="!messages.length && !disabled" role="assistant" variant="text">
-        <template #content>
-          <section class="welcomeMessage" aria-label="开始新对话">
-            <div class="welcomeHeader">
-              <span class="welcomeIcon" aria-hidden="true"><span class="welcomeLogo" :style="{ maskImage: `url(${logoUrl})` }" /></span>
-              <div>
-                <p class="welcomeLabel">你好，我是 Toonflow 助手</p>
-                <h3>从一个想法开始</h3>
-              </div>
-            </div>
-            <p class="welcomeDescription">聊聊你的故事、画面或镜头，让我们一起把想法落到画布上。</p>
-            <div class="welcomeSuggestions">
-              <el-button v-for="item in welcomeSuggestions" :key="item.label" class="welcomeSuggestion" text bg :disabled="locked" :aria-label="`填入提示：${item.label}`" @click="fillPrompt(item.prompt)">
-                <component :is="item.icon" :size="19" aria-hidden="true" />
-                <span class="suggestionContent"><strong>{{ item.label }}</strong><span>{{ item.description }}</span></span>
-                <icon-arrow-up-right class="suggestionArrow" :size="15" aria-hidden="true" />
-              </el-button>
-            </div>
-            <p class="welcomeHint">点击填入提示，也可以直接输入，或粘贴图片、视频。</p>
-          </section>
-        </template>
-      </chat-item>
-      <div v-for="item in messages" :key="item.id" class="messageRow" :class="{ userMessage: item.role === 'user', editingMessage: editingId === item.id }">
-        <chat-item :role="item.role" :variant="item.role === 'user' ? 'base' : 'text'" :textLoading="!!item.streaming && !compacting && !item.parts?.some(part => part.type === 'tool' || part.content)" animation="moving">
+    <div class="messageViewport t-chat t-chat--normal">
+      <div ref="messageList" class="messageList t-chat__list" role="region" aria-label="对话消息" tabindex="0">
+        <chat-item v-if="!messages.length && !disabled" role="assistant" variant="text">
           <template #content>
-            <div class="messageContent">
-              <div v-if="item.report" class="reportHeader"><icon-users-group :size="14" />{{ item.report.name }} 上报</div>
-              <template v-for="part in item.parts" :key="part.id">
-                <chat-reasoning v-if="part.type === 'thinking' && part.content" class="messageReasoning" :collapsed="part.collapsed ?? true" expandIconPlacement="left" @update:collapsed="part.collapsed = $event">
-                  <template #header>
-                    <span class="reasoningHeader">
-                      <icon-atom :size="14" />
-                      <span>思考</span>
-                      <span v-if="part.duration !== undefined" class="thinkingDuration">{{ part.duration.toFixed(1) }} 秒</span>
-                    </span>
-                  </template>
-                  <messageMarkdown v-if="!(part.collapsed ?? true)" :content="part.content" :streaming="!!item.streaming" :directory="directory" />
-                </chat-reasoning>
-                <toolMessage v-else-if="part.type === 'tool'" :tool="part.tool" :directory="directory" @copy="copyMessage" />
-                <messageMarkdown v-else-if="part.type === 'text' && part.content" :content="part.content" :streaming="!!item.streaming" :directory="directory" />
-              </template>
-              <attachmentList v-if="item.attachments?.length" :attachments="item.attachments" :directory="directory" />
-              <el-input v-if="item.role === 'user' && editingId === item.id" v-model="editingText" type="textarea" :autosize="{ minRows: 2, maxRows: 10 }" :disabled="locked" aria-label="编辑消息" @keydown.esc.prevent="cancelEdit" />
-              <div v-else-if="item.role === 'user'" class="messageText">{{ item.content }}</div>
-              <div v-if="item.error" class="messageError" role="alert">{{ item.error }}</div>
-            </div>
+            <section class="welcomeMessage" aria-label="开始新对话">
+              <div class="welcomeHeader">
+                <span class="welcomeIcon" aria-hidden="true"><span class="welcomeLogo" :style="{ maskImage: `url(${logoUrl})` }" /></span>
+                <div>
+                  <p class="welcomeLabel">你好，我是 Toonflow 助手</p>
+                  <h3>从一个想法开始</h3>
+                </div>
+              </div>
+              <p class="welcomeDescription">聊聊你的故事、画面或镜头，让我们一起把想法落到画布上。</p>
+              <div class="welcomeSuggestions">
+                <el-button v-for="item in welcomeSuggestions" :key="item.label" class="welcomeSuggestion" text bg :disabled="locked" :aria-label="`填入提示：${item.label}`" @click="fillPrompt(item.prompt)">
+                  <component :is="item.icon" :size="19" aria-hidden="true" />
+                  <span class="suggestionContent"><strong>{{ item.label }}</strong><span>{{ item.description }}</span></span>
+                  <icon-arrow-up-right class="suggestionArrow" :size="15" aria-hidden="true" />
+                </el-button>
+              </div>
+              <p class="welcomeHint">点击填入提示，也可以直接输入，或粘贴图片、视频。</p>
+            </section>
           </template>
         </chat-item>
-        <div v-if="!item.streaming" class="messageActions">
-          <template v-if="editingId === item.id">
-            <el-button text size="small" :disabled="busy || deletingId !== undefined" @click="cancelEdit"><icon-x :size="14" />取消</el-button>
-            <el-button type="primary" size="small" :loading="busy" :disabled="locked || (!editingText.trim() && !item.attachments?.length)" @click="sendMessage(item)"><icon-arrow-up v-if="!busy" :size="14" />重发</el-button>
-          </template>
-          <template v-else>
-            <el-button v-if="item.content" class="messageAction" text circle aria-label="复制消息" title="复制消息" @click="copyMessage(item.content)"><icon-copy :size="14" /></el-button>
-            <template v-if="item.role === 'user'">
-              <el-button class="messageAction" text circle :disabled="locked || remoteRunning" aria-label="编辑消息" title="编辑消息" @click="editMessage(item)"><icon-pencil :size="14" /></el-button>
-            </template>
-            <el-button v-if="!item.report" class="messageAction" text circle :loading="deletingId === item.id" :disabled="locked || remoteRunning" aria-label="删除消息" title="删除消息" @click="deleteMessage(item)"><icon-trash v-if="deletingId !== item.id" :size="14" /></el-button>
-          </template>
+        <div class="messageSpace" :style="{ height: `${messageVirtualizer.getTotalSize()}px` }">
+          <div
+            v-for="{ item, row } in visibleMessages"
+            :key="item.id"
+            :ref="measureMessage"
+            :data-index="row.index"
+            :data-message-id="item.id"
+            class="messageRow"
+            :style="{ transform: `translateY(${row.start}px)` }"
+            :class="{ userMessage: item.role === 'user', editingMessage: editingId === item.id }">
+            <chat-item :role="item.role" :variant="item.role === 'user' ? 'base' : 'text'" :textLoading="!!item.streaming && !compacting && !item.parts?.some(part => part.type === 'tool' || part.content)" animation="moving">
+              <template #content>
+                <div class="messageContent">
+                  <div v-if="item.report" class="reportHeader"><icon-users-group :size="14" />{{ item.report.name }} 上报</div>
+                  <template v-for="part in item.parts" :key="part.id">
+                    <chat-reasoning v-if="part.type === 'thinking' && part.content" class="messageReasoning" :collapsed="part.collapsed ?? true" expandIconPlacement="left" @update:collapsed="part.collapsed = $event">
+                      <template #header>
+                        <span class="reasoningHeader">
+                          <icon-atom :size="14" />
+                          <span>思考</span>
+                          <span v-if="part.duration !== undefined" class="thinkingDuration">{{ part.duration.toFixed(1) }} 秒</span>
+                        </span>
+                      </template>
+                      <messageMarkdown v-if="!(part.collapsed ?? true)" :content="part.content" :streaming="!!item.streaming" :directory="directory" />
+                    </chat-reasoning>
+                    <toolMessage v-else-if="part.type === 'tool'" v-model:collapsed="part.collapsed" :tool="part.tool" :directory="directory" @copy="copyMessage" />
+                    <messageMarkdown v-else-if="part.type === 'text' && part.content" :content="part.content" :streaming="!!item.streaming" :directory="directory" />
+                  </template>
+                  <attachmentList v-if="item.attachments?.length" :attachments="item.attachments" :directory="directory" />
+                  <div v-if="item.role === 'user'" class="messageText"><mentionContent :content="item.content" :mentions="item.mentions" :directory="directory" /></div>
+                  <div v-if="item.error" class="messageError" role="alert">{{ item.error }}</div>
+                </div>
+              </template>
+            </chat-item>
+            <div v-if="!item.streaming" class="messageActions">
+              <template v-if="editingId === item.id">
+                <el-button text size="small" :disabled="busy || deletingId !== undefined" @click="cancelEdit"><icon-x :size="14" />取消</el-button>
+                <span class="editingHint">正在下方编辑</span>
+              </template>
+              <template v-else>
+                <el-button v-if="item.content" class="messageAction" text circle aria-label="复制消息" title="复制消息" @click="copyMessage(mentionPlainText(item.content, item.mentions))"><icon-copy :size="14" /></el-button>
+                <template v-if="item.role === 'user'">
+                  <el-button class="messageAction" text circle :disabled="locked || remoteRunning" aria-label="编辑消息" title="编辑消息" @click="editMessage(item)"><icon-pencil :size="14" /></el-button>
+                </template>
+                <el-button v-if="!item.report" class="messageAction" text circle :loading="deletingId === item.id" :disabled="locked || remoteRunning" aria-label="删除消息" title="删除消息" @click="deleteMessage(item)"><icon-trash v-if="deletingId !== item.id" :size="14" /></el-button>
+              </template>
+            </div>
+          </div>
         </div>
       </div>
-    </chat-list>
+      <el-button v-if="messages.length && !atLatestMessage" class="scrollBottom" circle aria-label="回到最新消息" title="回到最新消息" @click="messageVirtualizer.scrollToEnd()"><icon-arrow-down :size="18" /></el-button>
+    </div>
     <div v-if="compacting" class="compactionStatus" role="status">
       <el-icon class="is-loading" aria-hidden="true"><icon-loader-2 :size="14" /></el-icon>
       <span>正在压缩上下文…</span>
     </div>
     <div class="messageInput">
+      <div v-if="editingId" class="editingBanner"><span>编辑消息</span><el-button text size="small" :disabled="busy" @click="cancelEdit">取消</el-button></div>
       <div
         class="senderResizeHandle"
         role="separator"
@@ -88,10 +101,13 @@
         @keydown.up.prevent="setSenderHeight((sender?.chatElement.rollBox.clientHeight ?? 44) + 16)"
         @keydown.down.prevent="setSenderHeight((sender?.chatElement.rollBox.clientHeight ?? 44) - 16)" />
       <attachmentList v-if="draftAttachments.length" class="draftAttachments" :attachments="draftAttachments" :directory="directory" removable @remove="draftAttachments.splice($event, 1)" />
-      <div ref="senderElement" class="senderEditor" @keydown.capture="skillMenuRef?.handleKeydown($event)"></div>
+      <div ref="senderElement" class="senderEditor" @keydown.capture="handleSenderKeydown"></div>
+      <teleport v-for="target in draftMentionTargets" :key="target.key" :to="target.element"><mentionThumbnail v-bind="mentionThumbnailProps(target.mention)" :directory="directory"><icon-photo :size="14" /></mentionThumbnail></teleport>
+      <mentionContent ref="draftMentionPreview" :mentions="draftMentions" :directory="directory" removable @remove="removeDraftMention" />
       <div class="senderActions">
         <modelPopover v-model="selectedModel" v-model:reasoningEffort="reasoningEffort" :active="active" :disabled="disabled" />
-        <skillMenu ref="skillMenuRef" :directory="directory" :active="active" :disabled="locked || editingId !== undefined || !directory" :query="skillQuery" :editor="senderElement" @select="selectSkill" @dismiss="skillQuery = undefined" />
+        <mentionMenu ref="mentionMenuRef" :directory="directory" :active="active" :disabled="locked || !directory" :query="mentionQuery" :editor="senderElement" :currentCanvasId="createCanvasContext?.()?.id" @open="captureMentionPosition" @select="insertMentions" @dismiss="mentionQuery = undefined" />
+        <skillMenu ref="skillMenuRef" :directory="directory" :active="active" :disabled="locked || !directory" :query="skillQuery" :editor="senderElement" @select="selectSkill" @dismiss="skillQuery = undefined" />
         <el-popover
           v-model:visible="contextMenuVisible"
           trigger="click"
@@ -124,7 +140,7 @@
             </div>
           </div>
         </el-popover>
-        <el-button class="sendButton" type="primary" circle :disabled="!busy && (locked || editingId !== undefined)" :aria-label="busy ? '停止生成' : '发送消息'" :title="busy ? '停止生成' : '发送消息'" @click="busy ? stopMessage() : sendMessage()">
+        <el-button class="sendButton" type="primary" circle :disabled="!busy && locked" :aria-label="busy ? '停止生成' : editingId ? '重发消息' : '发送消息'" :title="busy ? '停止生成' : editingId ? '重发消息' : '发送消息'" @click="busy ? stopMessage() : submitMessage()">
           <icon-player-stop-filled v-if="busy" :size="14" />
           <icon-arrow-up v-else :size="16" />
         </el-button>
@@ -134,10 +150,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, reactive, ref, watch } from "vue";
+import { computed, inject, nextTick, reactive, ref, shallowRef, watch, type ComponentPublicInstance } from "vue";
+import { defaultRangeExtractor, observeElementRect, useVirtualizer } from "@tanstack/vue-virtual";
 import axios from "axios";
 import {
-  IconArrowUp, IconAtom, IconCopy,
+  IconArrowUp, IconArrowDown, IconAtom, IconCopy,
   IconCircleDashed, IconPencil, IconPlayerStopFilled, IconX, IconLoader2,
   IconTrash, IconLayoutGrid, IconMovie, IconPhoto, IconArrowUpRight, IconUsersGroup,
 } from "@tabler/icons-vue";
@@ -145,6 +162,10 @@ import { ElMessage } from "element-plus";
 import logoUrl from "@toonflow/assets/logo.svg";
 import modelPopover from "@/components/modelPopover.vue";
 import skillMenu from "./skillMenu.vue";
+import mentionMenu from "./mentionMenu.vue";
+import mentionContent from "./mentionContent.vue";
+import mentionThumbnail from "./mentionThumbnail.vue";
+import { mentionName, mentionParts, mentionPlainText, mentionThumbnailProps } from "./mentionText";
 import toolMessage from "./toolMessage.vue";
 import attachmentList from "./attachmentList.vue";
 import useWorkspaceFiles from "@/lib/workspaceFiles";
@@ -153,14 +174,13 @@ import anonymousData from "@/lib/anonymousData";
 import { modelChoices } from "@/stores/settings";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { AgentAttachment, AgentConversation, AgentMessage } from "./types";
-import type { AgentEvent } from "@toonflow/server/agent/types";
+import type { AgentEvent, AgentMention } from "@toonflow/server/agent/types";
 import { createConversationStream, readAgentEvents } from "./replyStream";
 import type { CanvasContext } from "@toonflow/tool-canvas/runtime";
-import chatList from "@tdesign-vue-next/chat/es/chat-list";
 import chatItem from "@tdesign-vue-next/chat/es/chat-item";
 import chatReasoning from "@tdesign-vue-next/chat/es/chat-reasoning";
 import messageMarkdown from "@/components/messageMarkdown.vue";
-import xSender from "x-sender";
+import xSender, { type AnyTagProps } from "x-sender";
 import "tdesign-vue-next/es/style/index.css";
 import "@tdesign-vue-next/chat/es/style/index.css";
 import "x-sender/lib/XSender.css";
@@ -181,12 +201,64 @@ const compacting = ref(false);
 const deletingId = ref<string>();
 const locked = computed(() => props.disabled || busy.value || deletingId.value !== undefined);
 const editingId = ref<string>();
-const editingText = ref("");
+const draftMentions = ref<AgentMention[]>([]);
+const draftMentionTargets = shallowRef<{ key: symbol; element: HTMLElement; mention: AgentMention }[]>([]);
+const draftMentionPreview = ref<InstanceType<typeof mentionContent>>();
+let editDraft: { model: AnyTagProps[][]; mentions: AgentMention[]; attachments: AgentAttachment[] } | undefined;
+const messageList = ref<HTMLDivElement>();
+const atLatestMessage = ref(true);
+let messageListInitialized = false;
+let messageScrollOffset = 0;
+const messageKeys = computed(() => messages.value.map(item => item.id));
+const retainedMessages = computed(() => messages.value.flatMap((item, index) => item.streaming || item.id === editingId.value ? [index] : []));
+const messageVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>(computed(() => {
+  const keys = messageKeys.value;
+  const retained = retainedMessages.value;
+  return {
+    count: keys.length,
+    getScrollElement: () => messageList.value ?? null,
+    getItemKey: (index: number) => keys[index]!,
+    estimateSize: () => 240,
+    overscan: 3,
+    paddingStart: 12,
+    anchorTo: "end" as const,
+    followOnAppend: true,
+    scrollEndThreshold: 48,
+    useAnimationFrameWithResizeObserver: true,
+    useCachedMeasurements: !props.active,
+    // ACT: v-show 隐藏时保留视口与行高，避免零尺寸清空正在输入的工具表单。
+    observeElementRect: (instance, onChange) => observeElementRect(instance, rect => { if (rect.height) onChange(rect); }),
+    rangeExtractor: range => [...new Set([...defaultRangeExtractor(range), ...retained])].sort((left, right) => left - right),
+    onChange(instance) {
+      if (!messageListInitialized || !props.active || !messageList.value?.clientHeight) return;
+      atLatestMessage.value = instance.isAtEnd();
+      messageScrollOffset = instance.scrollOffset ?? 0;
+    },
+  };
+}));
+const visibleMessages = computed(() => messageVirtualizer.value.getVirtualItems().map(row => ({ row, item: messages.value[row.index]! })));
+
+function measureMessage(element: Element | ComponentPublicInstance | null) {
+  messageVirtualizer.value.measureElement(element instanceof HTMLDivElement ? element : null);
+}
+
+watch([() => props.active, messageList], async ([active, element]) => {
+  if (!active || !element) return;
+  await nextTick();
+  if (!props.active) return;
+  if (!messageListInitialized || atLatestMessage.value) messageVirtualizer.value.scrollToEnd();
+  else messageVirtualizer.value.scrollToOffset(messageScrollOffset);
+  messageListInitialized = true;
+}, { immediate: true, flush: "post" });
 let sender: xSender | undefined;
 let controller: AbortController | undefined;
 const senderElement = ref<HTMLElement>();
 const skillMenuRef = ref<InstanceType<typeof skillMenu>>();
 const skillQuery = ref<string>();
+const mentionMenuRef = ref<InstanceType<typeof mentionMenu>>();
+const mentionQuery = ref<string>();
+let mentionPosition: { node: ReturnType<xSender["getCurrentNode"]>; remove: number } | undefined;
+let insertingMentions = false;
 const senderHeight = ref(44);
 const senderMaxHeight = ref(Math.max(44, window.innerHeight / 2));
 let senderResize: { pointerId: number; y: number; height: number } | undefined;
@@ -204,8 +276,8 @@ const welcomeSuggestions = [
   { label: "梳理故事分镜", description: "拆解故事，安排画面与镜头", icon: IconMovie, prompt: "帮我把故事整理成分镜，先和我确认故事内容、时长和画面风格。" },
   { label: "生成图片素材", description: "为角色和场景寻找视觉方向", icon: IconPhoto, prompt: "帮我生成图片素材，先和我确认画面内容、风格和使用的模型。" },
 ];
-watch([locked, editingId, () => props.active], ([locked, editingId, active]) => {
-  if (!active || locked || editingId !== undefined) sender?.disable();
+watch([locked, () => props.active], ([locked, active]) => {
+  if (!active || locked) sender?.disable();
   else sender?.enable();
 });
 watch(() => props.active, active => {
@@ -240,19 +312,90 @@ function receiveEvent(event: AgentEvent) {
 
 defineExpose({ receiveEvent });
 
+function getDraftContent() {
+  return sender?.getModel().map((line, lineIndex) => line.map((tag, tagIndex) => {
+    if (tag.type === "Mention") return `{{mention:${tag.id}}}`;
+    if (tag.type === "Write") return tag.text;
+    return sender?.chatEditor.NODES[lineIndex]?.children[tagIndex]?.$el.textContent ?? "";
+  }).join("")).join("\n").replace(/[\ufeff\u200b]/g, "") ?? "";
+}
+
+function captureMentionPosition() {
+  const node = sender?.getCurrentNode();
+  mentionPosition = node?.instance?.$el.isConnected ? { node: { ...node }, remove: mentionQuery.value === undefined ? 0 : mentionQuery.value.length + 1 } : undefined;
+  skillQuery.value = undefined;
+}
+
+function updateMentionQuery() {
+  if (!sender || insertingMentions || sender.chatEditor.isComposition || !sender.chatElement.richText.contains(sender.getSelection().anchorNode)) return;
+  const current = sender.getCurrentNode();
+  const before = current?.instance?.type === "Write" ? current.instance.text.slice(0, current.offset) : "";
+  mentionQuery.value = /(?:^|[^\w@])@([^\s@]*)$/.exec(before)?.[1];
+  if (mentionQuery.value !== undefined) captureMentionPosition();
+}
+
+function handleSenderKeydown(event: KeyboardEvent) {
+  const id = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>("[data-agent-mention]")?.dataset.agentMention : undefined;
+  if (id && ["Enter", " "].includes(event.key)) {
+    event.preventDefault();
+    event.stopPropagation();
+    draftMentionPreview.value?.preview(id);
+    return;
+  }
+  if (mentionMenuRef.value?.handleKeydown(event)) return;
+  skillMenuRef.value?.handleKeydown(event);
+}
+
+async function insertMentions(mentions: AgentMention[]) {
+  const instance = sender;
+  if (!instance || locked.value || !props.active) return;
+  const currentIds = new Set(instance.getTagData().mention.map(item => item.id));
+  if (currentIds.size + mentions.length > 20) return ElMessage.warning("每条消息最多提及 20 个输出或素材");
+  insertingMentions = true;
+  try {
+    if (mentionPosition?.node.instance.$el.isConnected) mentionPosition.node.instance.focus(mentionPosition.node.offset);
+    else instance.focus("last");
+    if (mentionPosition?.remove) await instance.backspace(-mentionPosition.remove);
+    for (const mention of mentions) {
+      if (sender !== instance || !props.active) break;
+      draftMentions.value.push(mention);
+      await instance.setMention({ id: mention.id, name: mentionName(mention) });
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "添加提及失败");
+  } finally {
+    mentionQuery.value = undefined;
+    mentionPosition = undefined;
+    insertingMentions = false;
+  }
+}
+
+async function removeDraftMention(id: string) {
+  if (!locked.value) await sender?.removeMention([id]);
+}
+
+function submitMessage() {
+  return sendMessage(editingId.value ? messages.value.find(item => item.id === editingId.value) : undefined);
+}
+
 async function selectSkill(name: string) {
   const instance = sender;
-  if (!instance || locked.value || editingId.value !== undefined) return;
-  const draft = instance.getText().replace(skillQuery.value !== undefined ? /^\/\S*/ : /^\s*\/skill:\S+(?:\s+|$)/, "");
+  if (!instance || locked.value) return;
+  const model = instance.getModel();
+  const first = model[0]?.[0];
+  if (first?.type === "Write") first.text = `/skill:${name} ${first.text.replace(skillQuery.value !== undefined ? /^\/\S*/ : /^\s*\/skill:\S+(?:\s+|$)/, "")}`;
+  if (!model.length) model.push([]);
+  if (first?.type !== "Write") model[0]!.unshift({ type: "Write", text: `/skill:${name} ` });
   skillQuery.value = undefined;
-  const text = `/skill:${name} ${draft}`;
-  await instance.reset({ clearHistory: false, chatNode: text.split("\n").map(text => [{ type: "Write", text }]) });
+  mentionMenuRef.value?.closeMenu();
+  await instance.reset({ clearHistory: false, chatNode: model });
   if (sender === instance) instance.focus("last");
 }
 
 async function fillPrompt(prompt: string) {
   const instance = sender;
   if (!instance || locked.value) return;
+  draftMentions.value = [];
   await instance.reset({ clearHistory: false, chatNode: [[{ type: "Write", text: prompt }]] });
   if (sender === instance) instance.focus("last");
 }
@@ -266,16 +409,32 @@ async function copyMessage(content: string) {
   }
 }
 
-function editMessage(item: AgentMessage) {
-  if (locked.value || remoteRunning.value || item.role !== "user") return;
+async function editMessage(item: AgentMessage) {
+  const instance = sender;
+  if (!instance || locked.value || remoteRunning.value || item.role !== "user") return;
+  if (!editingId.value) editDraft = { model: instance.getModel(), mentions: [...draftMentions.value], attachments: [...draftAttachments.value] };
   editingId.value = item.id;
-  editingText.value = item.content;
+  draftMentions.value = [...item.mentions ?? []];
+  draftAttachments.value = [...item.attachments ?? []];
+  mentionMenuRef.value?.closeMenu();
+  const model: AnyTagProps[][] = item.content.split("\n").map(line => mentionParts(line, item.mentions).map(part => part.mention
+    ? { type: "Mention", id: part.mention.id, name: mentionName(part.mention) } : { type: "Write", text: part.text }));
+  await instance.reset({ chatNode: model });
+  if (sender === instance) instance.focus("last");
 }
 
-function cancelEdit() {
-  if (busy.value || deletingId.value !== undefined) return;
+async function restoreEditingDraft() {
+  const draft = editDraft;
+  editDraft = undefined;
   editingId.value = undefined;
-  editingText.value = "";
+  draftMentions.value = draft?.mentions ?? [];
+  draftAttachments.value = draft?.attachments ?? [];
+  await sender?.reset({ chatNode: draft?.model });
+}
+
+async function cancelEdit() {
+  if (busy.value || deletingId.value !== undefined) return;
+  await restoreEditingDraft();
 }
 
 async function deleteMessage(item: AgentMessage) {
@@ -353,20 +512,20 @@ async function uploadAttachments(attachments: AgentAttachment[], directory: stri
 }
 
 async function sendCanvasResult(event: Extract<AgentEvent, { type: "canvasCall" }>, canvasContext: CanvasContext | undefined, signal: AbortSignal) {
-  let payload: { result?: unknown; error?: string };
+  let body: string;
   try {
     if (!canvasContext) throw new Error("当前页面没有激活的画布");
     const result = await canvasContext.call(event, signal);
-    payload = { result: JSON.parse(JSON.stringify(result ?? null)) };
+    body = JSON.stringify({ directory, callId: event.callId, result: result ?? null });
   } catch (error) {
-    payload = { error: (error instanceof Error && error.message ? error.message : "画布操作失败").slice(0, 8000) };
+    body = JSON.stringify({ directory, callId: event.callId, error: (error instanceof Error && error.message ? error.message : "画布操作失败").slice(0, 8000) });
   }
   const cancelled = signal.aborted;
-  if (cancelled) payload = { error: "画布操作已取消" };
+  if (cancelled) body = JSON.stringify({ directory, callId: event.callId, error: "画布操作已取消" });
   const response = await fetch("/api/agent/canvasResult", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-toonflow-workspace": "1" },
-    body: JSON.stringify({ directory, callId: event.callId, ...payload }),
+    body,
     keepalive: cancelled,
     signal: cancelled ? AbortSignal.timeout(5000) : signal,
   });
@@ -378,8 +537,14 @@ async function sendCanvasResult(event: Extract<AgentEvent, { type: "canvasCall" 
 
 async function sendMessage(source?: AgentMessage) {
   const instance = sender;
-  const prompt = (source ? editingId.value === source.id ? editingText.value : source.content : instance?.getText())?.trim() ?? "";
-  const attachments = reactive((source ? source.attachments ?? [] : draftAttachments.value).map(item => ({ ...item })));
+  const editing = source && editingId.value === source.id;
+  const prompt = (source && !editing ? source.content : getDraftContent()).trim();
+  const attachments = reactive((source && !editing ? source.attachments ?? [] : draftAttachments.value).map(item => ({ ...item })));
+  const mentionedIds = source && !editing ? (source.mentions ?? []).filter(mention => prompt.includes(`{{mention:${mention.id}}}`)).map(mention => mention.id)
+    : instance?.getTagData().mention.map(mention => mention.id) ?? [];
+  const references = source && !editing ? source.mentions ?? [] : draftMentions.value;
+  const mentions = references.filter(mention => mentionedIds.includes(mention.id)).map(mention => ({ ...mention }));
+  if (mentionedIds.some(id => !mentions.some(mention => mention.id === id))) return ElMessage.warning("存在无法读取的提及，请删除后重新选择");
   if (!source && editingId.value !== undefined) return;
   const resendIndex = source ? messages.value.findIndex(item => item.id === source.id) : -1;
   if (source && (source.role !== "user" || resendIndex < 0)) return;
@@ -396,13 +561,14 @@ async function sendMessage(source?: AgentMessage) {
   compacting.value = false;
   instance.disable();
   const reply = reactive<AgentMessage>({ id: crypto.randomUUID(), role: "assistant", content: "", parts: [], streaming: true });
-  const userMessage = reactive<AgentMessage>({ id: crypto.randomUUID(), role: "user", content: prompt, attachments });
+  const userMessage = reactive<AgentMessage>({ id: crypto.randomUUID(), role: "user", content: prompt, attachments, mentions });
   let ownsStream = !remoteRunning.value;
   let forwarded = false;
   if (!source) {
     messages.value.push(userMessage);
     if (ownsStream) messages.value.push(reply);
     draftAttachments.value = [];
+    draftMentions.value = [];
   }
   let accepted = false;
   if (ownsStream) stream.begin(reply);
@@ -417,7 +583,7 @@ async function sendMessage(source?: AgentMessage) {
     const response = await fetch("/api/agent", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-toonflow-workspace": "1" },
-      body: JSON.stringify({ prompt, attachments: attachments.map(({ name, path, mimeType }) => ({ name, path, mimeType })), directory, providerId: model.providerId, modelId: model.modelId, thinkingLevel: reasoningEffort.value || undefined, sessionFile: props.sessionFile, resendFrom, canvas: canvasContext ? { id: canvasContext.id, tools: canvasContext.tools } : undefined }),
+      body: JSON.stringify({ prompt, mentions, attachments: attachments.map(({ name, path, mimeType }) => ({ name, path, mimeType })), directory, providerId: model.providerId, modelId: model.modelId, thinkingLevel: reasoningEffort.value || undefined, sessionFile: props.sessionFile, resendFrom, canvas: canvasContext ? { id: canvasContext.id, tools: canvasContext.tools } : undefined }),
       signal: requestController.signal,
     });
     for await (const event of readAgentEvents(response, requestController.signal)) {
@@ -457,8 +623,7 @@ async function sendMessage(source?: AgentMessage) {
             messages.value.splice(resendIndex, messages.value.length - resendIndex, userMessage, reply);
             stats.value = undefined;
             contextUsage.value = undefined;
-            editingId.value = undefined;
-            editingText.value = "";
+            await restoreEditingDraft();
           }
           accepted = true;
           ownsStream = true;
@@ -473,7 +638,7 @@ async function sendMessage(source?: AgentMessage) {
     }
     if (source && !accepted) throw new Error("服务端未确认重发，请重新打开对话后重试");
     finishStats("success");
-    emit("sent", prompt || attachments[0]?.name || "新对话");
+    emit("sent", mentionPlainText(prompt, mentions) || attachments[0]?.name || "新对话");
   } catch (error) {
     finishStats(requestController.signal.aborted ? "cancelled" : "failed");
     const responseMessage = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
@@ -504,7 +669,7 @@ function pasteAttachments(event: ClipboardEvent) {
   if (!files.length) return;
   event.preventDefault();
   event.stopImmediatePropagation();
-  if (locked.value || editingId.value !== undefined) return;
+  if (locked.value) return;
   for (const file of files) {
     if (!/^(image|video)\//.test(file.type)) {
       ElMessage.warning("只支持图片和视频文件");
@@ -526,27 +691,60 @@ watch(senderElement, (element, _previous, onCleanup) => {
   if (!element) return;
   const instance = new xSender(element, {
     autoFocus: props.active,
-    placeholder: "输入消息…",
+    placeholder: "输入消息，@ 提及节点输出或全局素材…",
     chatStyle: { minHeight: "44px", maxHeight: "50vh", fontSize: "14px", lineHeight: "24px" },
     keyboardSendFun: event => event.key === "Enter" && !event.shiftKey && !event.isComposing,
     keyboardWrapFun: event => event.key === "Enter" && event.shiftKey && !event.isComposing,
   });
   sender = instance;
-  if (!props.active || locked.value || editingId.value !== undefined) instance.disable();
-  instance.bus.on("agentConversation", xSender.EventSet.EVENT_COMMON_SEND, () => void sendMessage());
+  if (!props.active || locked.value) instance.disable();
+  instance.bus.on("agentConversation", xSender.EventSet.EVENT_COMMON_SEND, () => void submitMessage());
   instance.bus.on("agentConversation", xSender.EventSet.EVENT_COMMON_CHANGE, () => {
     skillQuery.value = /^\/([^\s/]*)$/.exec(instance.getText())?.[1];
+    const targets: typeof draftMentionTargets.value = [];
+    for (const line of instance.chatEditor.NODES) for (const tag of line.children) {
+      if (tag.type !== "Mention") continue;
+      tag.$el.dataset.agentMention = tag.id;
+      tag.$el.setAttribute("role", "button");
+      tag.$el.setAttribute("tabindex", "0");
+      tag.$el.setAttribute("aria-label", `预览 ${tag.name}`);
+      const mention = draftMentions.value.find(item => item.id === tag.id);
+      if (!mention || !mentionThumbnailProps(mention).thumbnail) continue;
+      const content = tag.$el.querySelector<HTMLElement>(".chat-tag-mention");
+      if (!content) continue;
+      let element = content.querySelector<HTMLElement>(".agentMentionThumbnail");
+      if (!element) {
+        element = document.createElement("span");
+        element.className = "agentMentionThumbnail";
+        const label = document.createElement("span");
+        label.className = "agentMentionLabel";
+        label.textContent = content.textContent;
+        content.replaceChildren(element, label);
+      }
+      targets.push({ key: draftMentionTargets.value.find(target => target.element === element)?.key ?? Symbol(), element, mention });
+    }
+    draftMentionTargets.value = targets;
+    void instance.nextTick(() => { if (sender === instance) updateMentionQuery(); });
+  });
+  instance.bus.on("agentConversation", xSender.EventSet.EVENT_COMMON_TAG_CLICK, (tag: { type: string; id?: string }) => {
+    if (tag.type === "Mention" && tag.id) draftMentionPreview.value?.preview(tag.id);
   });
   const editor = instance.chatElement.richText;
   editor.setAttribute("role", "textbox");
   editor.setAttribute("aria-label", "消息");
   editor.setAttribute("aria-multiline", "true");
   element.addEventListener("paste", pasteAttachments, true);
+  const updateCursor = (event: Event) => { if (!(event instanceof KeyboardEvent) || event.key !== "Escape") updateMentionQuery(); };
+  editor.addEventListener("keyup", updateCursor);
+  editor.addEventListener("compositionend", updateCursor);
   onCleanup(() => {
     controller?.abort();
+    draftMentionTargets.value = [];
     sender = undefined;
     senderResize = undefined;
     element.removeEventListener("paste", pasteAttachments, true);
+    editor.removeEventListener("keyup", updateCursor);
+    editor.removeEventListener("compositionend", updateCursor);
     instance.destroy();
   });
 });
@@ -569,19 +767,32 @@ watch(() => !props.initialSession?.parentFile && !!workspaceStore.pendingAgentMe
   min-height: 0;
   overflow: hidden;
 
-  .messageList {
+  .messageViewport {
     flex: 1;
     min-height: 0;
 
-    .t-chat__list {
-      padding: 12px;
+    .messageList {
+      overflow-anchor: none;
+      scrollbar-gutter: stable;
+    }
+
+    .messageSpace {
+      position: relative;
+      width: 100%;
+    }
+
+    .scrollBottom {
+      position: absolute;
+      right: 16px;
+      bottom: 12px;
+      z-index: 1;
     }
 
     .welcomeMessage {
       display: flex;
       flex-direction: column;
       gap: 18px;
-      padding: 28px 4px 16px;
+      padding: 28px 16px 16px;
       color: var(--el-text-color-primary);
 
       .welcomeHeader {
@@ -647,7 +858,12 @@ watch(() => !props.initialSession?.parentFile && !!workspaceStore.pendingAgentMe
     }
 
     .messageRow {
-      margin-bottom: 12px;
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      box-sizing: border-box;
+      padding: 0 12px 12px;
 
       .messageActions {
         display: flex;
@@ -806,6 +1022,7 @@ watch(() => !props.initialSession?.parentFile && !!workspaceStore.pendingAgentMe
     --chat-text: var(--el-text-color-primary);
     --chat-text-placeholder: var(--el-text-color-placeholder);
     --chat-rect-padding: 12px;
+    --chat-mention-text: var(--el-color-primary);
     position: relative;
     flex-shrink: 0;
     margin: 0 12px 8px;
@@ -844,6 +1061,38 @@ watch(() => !props.initialSession?.parentFile && !!workspaceStore.pendingAgentMe
       font-size: 14px;
       font-style: normal;
       line-height: 24px;
+    }
+
+    .editingBanner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 3px 12px;
+      border-bottom: 1px solid var(--el-border-color-lighter);
+      color: var(--el-text-color-secondary);
+      font-size: 12px;
+    }
+
+    .senderEditor .chat-tag-mention {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      max-width: 100%;
+      vertical-align: middle;
+      border-radius: var(--el-border-radius-small);
+      background: var(--el-color-primary-light-9);
+      color: var(--el-color-primary);
+      white-space: normal;
+      overflow-wrap: anywhere;
+      cursor: pointer;
+
+      .agentMentionThumbnail {
+        display: inline-flex;
+        flex-shrink: 0;
+
+        .mentionThumbnail { width: 24px; height: 24px; border-radius: 3px; }
+      }
+      .agentMentionLabel { min-width: 0; }
     }
 
     .senderActions {

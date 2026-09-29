@@ -4,6 +4,8 @@ import tfRouter from "@toonflow/providers/language/tfRouter";
 import type { RemoteTeam } from "@/utils/teams";
 import type { A2aSettings } from "@/agent/a2a/settings";
 
+const autoInstallProviders = [tfRouter];
+
 const config = new conf<{ settings: Record<string, unknown>; toolConfigs: Record<string, Record<string, unknown>>; nodeConfigs: Record<string, Record<string, unknown>>; remoteConnections: Record<string, RemoteTeam>; a2a: A2aSettings }>({
   cwd: process.env.TOONFLOW_DATA_DIR ?? resolve(import.meta.dirname, "../../../../../data"),
   configName: "settings",
@@ -28,8 +30,8 @@ if (removeLegacySettings(settings)) config.set("settings", settings);
 
 // ACT: 仅初始化尚未配置的文本供应商；已有列表（包括用户清空的列表）保持原样。
 if (!config.has("settings.customProviders")) {
-  const { id, label, version, apiUrl, protocol, models } = tfRouter;
-  config.set("settings.customProviders", [{ id, label, version, apiUrl, protocol, models, apiKey: "" }]);
+  config.set("settings.customProviders", autoInstallProviders.map(({ id, label, version, apiUrl, protocol, models }) =>
+    ({ id, label, version, apiUrl, protocol, models, apiKey: "" })));
 }
 
 export default config;

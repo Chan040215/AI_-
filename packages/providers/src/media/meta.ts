@@ -48,7 +48,7 @@ async function pollVideo(context: ProviderContext, baseUrl: string, apiKey: stri
     const data = await response.json();
     const status = data?.task?.status;
     if (status === "succeeded") return data.task.content.url;
-    if (status === "failed") throw new Error("视频生成失败");
+    if (status === "failed") throw new Error(context.tool.errorMessage?.(data) || "视频生成失败");
     await wait(signal, 5000);
   }
 }

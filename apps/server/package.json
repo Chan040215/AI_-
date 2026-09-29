@@ -6,7 +6,8 @@
     "./app": "./src/app.ts",
     "./desktop": "./src/types/desktop.ts",
     "./mcp": "./src/utils/mcp/runtime.ts",
-    "./agent/types": "./src/agent/runtime/types.ts"
+    "./agent/types": "./src/agent/runtime/types.ts",
+    "./agent/mentionSources": "./src/agent/mentionSources.ts"
   },
   "scripts": {
     "routes": "bun src/core.ts",

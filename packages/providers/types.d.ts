@@ -76,6 +76,8 @@ interface FfmpegRequiredError extends Error {
 
 interface ProviderTools {
   fetch: typeof globalThis.fetch;
+  /** 提取供应商错误正文中的可读原因，并隐藏配置中的密钥和 URL 查询参数。 */
+  errorMessage(value: unknown): string;
   hash: typeof Bun.hash;
   image: typeof Bun.Image;
   /**

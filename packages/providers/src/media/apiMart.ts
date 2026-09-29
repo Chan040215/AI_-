@@ -104,8 +104,8 @@ async function reviewSeedanceAssets(context: ProviderContext, apiKey: string, ba
       const usableAssets = Array.isArray(result.usable_assets) ? result.usable_assets : [];
       const assetUrls = usableAssets.map((asset: any) => asset?.asset_url).filter(Boolean);
       if (!assetUrls.length) {
-        const error = object(taskData.error ?? {}).message;
-        throw new Error(typeof error === "string" ? error : "素材审核失败");
+        const error = (taskData.error as { message?: unknown } | undefined)?.message;
+        throw new Error(context.tool.errorMessage?.(taskData) || (typeof error === "string" ? error : "素材审核失败"));
       }
       return assetUrls;
     }
@@ -125,15 +125,15 @@ async function pollTaskResult<T>(context: ProviderContext, baseUrl: string, apiK
     const status = String(result.status ?? data.status ?? "").toLowerCase();
     if (status === "completed" || status === "success") return extract(data);
     if (status === "failed" || status === "failure") {
-      const error = object(data.error ?? {}).message;
-      throw new Error(typeof error === "string" ? error : "生成失败");
+      const error = (data.error as { message?: unknown } | undefined)?.message;
+      throw new Error(context.tool.errorMessage?.(result) || (typeof error === "string" ? error : "生成失败"));
     }
     await wait(signal, 3000);
   }
 }
 
 export default {
-  id: "apimart",
+  id: "apiMart",
   label: "APIMart",
   version,
   readme: `## APIMart

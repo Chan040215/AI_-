@@ -110,7 +110,9 @@ URI 结构为 `toonflow://skills/<技能名称编码>/<技能内文件路径分�
 
 `target` 及其字段可选，操作画布时建议明确传入 `connectionId`、`directory` 和 `canvasId`，避免用户手动切换画布后旧命令作用于新画布。切换项目或画布成功后重新读取状态，更新目标 ID。
 
-画布工具与内置 Agent 共用已有实现。节点能力通过 `getCanvas` 或 `addNode` 的结果发现，再通过 `nodeTools` 调用。插件禁用、目标不匹配、连接断开时返回明确错误。
+画布工具与内置 Agent 共用已有实现。`getCanvas` 默认返回概览，按需附带分页的画布列表或节点类型；`findCanvasNodes` 筛选定位节点，`getCanvasNodes` 按 ID 和字段读取详情，`getCanvasEdges` 分页查询局部连接，`getNodeTools` 查询目标节点完整函数 schema，再通过 `nodeTools` 调用。每次读取限制为 64 KiB，使用 `hasMore/nextCursor` 续读，空结果也可能仍需扫描；大节点字段可通过 `path` 和 `textOffset/textLimit` 或 `valueOffset/valueLimit` 分段读取。全图任务按批推进并保留摘要和游标，不注入全量节点函数。插件禁用、目标不匹配、连接断开时返回明确错误。
+
+节点/连线查询每页最多扫描 2000 项；`totalNodes/totalEdges` 是画布总量，`selectedOnly` 为现场筛选。名称匹配全文，结果名称预览最多 512 字符。详情和函数查询的节点 ID 不能重复；正偏移要求 `path`，路径最多 64 层、2048 JSON UTF-8 字节，`pathDepthLimit` 表示达到深度限制。整理、适配视口和删除回执中的 ID 最多 100 项，并附实际计数及截断标志；不能因回执缩略重复执行。`nodeTools` 的业务返回值不受五个读取工具的 64 KiB 上限约束。
 
 | 能力 | 调用方式 |
 | --- | --- |

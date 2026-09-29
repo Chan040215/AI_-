@@ -71,6 +71,7 @@
         "@form-create/element-ui": "^3",
         "@markmend/ast": "1.1.0",
         "@tabler/icons-vue": "^3.46.0",
+        "@tanstack/vue-virtual": "3.13.39",
         "@tdesign-vue-next/chat": "^0.7.0",
         "@tiptap/core": "3.31.3",
         "@tiptap/extension-find-and-replace": "3.31.3",
@@ -461,6 +462,9 @@
         "@toonflow/tools-scaffold": "workspace:*",
       },
     },
+  },
+  "patchedDependencies": {
+    "@vue-flow/core@1.48.2": "patches/vueFlowCore.patch",
   },
   "packages": {
     "@a2a-js/sdk": ["@a2a-js/sdk@1.2.0", "https://registry.npmmirror.com/@a2a-js/sdk/-/sdk-1.2.0.tgz", { "dependencies": { "jose": "^6.2.3" }, "peerDependencies": { "@bufbuild/protobuf": "^2.10.2", "@grpc/grpc-js": "^1.11.0", "express": "^4.21.2 || ^5.1.0" }, "optionalPeers": ["@bufbuild/protobuf", "@grpc/grpc-js", "express"] }, "sha512-zxjvBrxhPV4J/RN8QTbsYaUIu9Y9RvmR06IP5o42UdJX42A9I0m1StGVvqrcCQ3bdu3SzWHPm5CeC2FNHARvkw=="],
@@ -914,6 +918,10 @@
     "@tabler/icons": ["@tabler/icons@3.46.0", "https://registry.npmmirror.com/@tabler/icons/-/icons-3.46.0.tgz", {}, "sha512-f2RYFl3fzPwj5WO82x6en0dmkjefxEfOm16D1ByM6cj/McNiwOkL4VaPUoP9VVIrXAD9WnTSVFr70px703b//A=="],
 
     "@tabler/icons-vue": ["@tabler/icons-vue@3.46.0", "https://registry.npmmirror.com/@tabler/icons-vue/-/icons-vue-3.46.0.tgz", { "dependencies": { "@tabler/icons": "3.46.0" }, "peerDependencies": { "vue": ">=3.0.1" } }, "sha512-RkYlrGx8NY5ePXk0fTJJaDYQpjbi0ys33Cvswnvn83X04IVOCEaEqS2S3GANcp1dgEu9Fs7c6kd2sdJbwOZQtw=="],
+
+    "@tanstack/virtual-core": ["@tanstack/virtual-core@3.17.11", "https://registry.npmmirror.com/@tanstack/virtual-core/-/virtual-core-3.17.11.tgz", {}, "sha512-+ILjvtHup6Y2hzQ6YzwMgX1Q+oQpxEGOXCEsCNaPoIP0VxMbizIBTmYTDtkerkIQS8/CbP1BRuyt8V/8BCsy1g=="],
+
+    "@tanstack/vue-virtual": ["@tanstack/vue-virtual@3.13.39", "https://registry.npmmirror.com/@tanstack/vue-virtual/-/vue-virtual-3.13.39.tgz", { "dependencies": { "@tanstack/virtual-core": "3.17.11" }, "peerDependencies": { "vue": "^2.7.0 || ^3.0.0" } }, "sha512-AG8sI+6nfrDvN6ixuHJL9LaJTf3//0V5VITZYW3UOaIuSVexnEzsbMu4LH/JhMfRTxwhUXPnLqkl1DlzkZbRtg=="],
 
     "@tdesign-vue-next/chat": ["@tdesign-vue-next/chat@0.7.0", "https://registry.npmmirror.com/@tdesign-vue-next/chat/-/chat-0.7.0.tgz", { "dependencies": { "@babel/runtime": "^7.22.6", "@json-render/core": "^0.19.0", "@tdesign/web-components": "^1.3.2", "@tdesign/web-components-chat": "^1.3.3", "@types/lodash-es": "^4.17.12", "clipboard": "^2.0.11", "highlight.js": "^11.9.0", "lodash-es": "^4.18.1", "marked": "^12.0.1", "marked-highlight": "^2.1.1", "omi-vueify": "^0.0.12", "tdesign-icons-vue-next": "^0.4.11", "zod": "^4.3.6" }, "peerDependencies": { "tdesign-vue-next": ">=1", "vue": ">=3.1.0" } }, "sha512-6pXWo7Nm+onKTgNure2JqSALBpXk5QOr+NXZPzJPQyVJTvcMD6r/XVjP07Kb8gw/MSIqHGGWGioA8yh3s1y2cA=="],
 

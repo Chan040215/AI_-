@@ -29,7 +29,7 @@ export async function runDelegatedAgent(options: {
   const questions = createQuestionContext(cwd, send, () => controller.abort());
   const result: SubAgentResult = { name, status: "running", result: "准备执行" };
   try {
-    await run({ prompt: task, cwd, sessionFile: child.file, providerId, modelId, thinkingLevel, canvas: bridge?.context, question: questions.context, signal: childSignal }, send);
+    await run({ prompt: task, cwd, sessionFile: child.file, providerId, modelId, thinkingLevel, canvas: bridge?.context, question: questions.context, signal: childSignal, onCancel: () => controller.abort() }, send);
     result.status = childSignal.aborted ? "cancelled" : "completed";
   } catch (error) {
     result.status = childSignal.aborted ? "cancelled" : (error as { code?: string })?.code === "AGENT_LENGTH" ? "limited" : "error";

@@ -14,6 +14,9 @@
   },
   "type": "module",
   "packageManager": "bun@1.3.14",
+  "patchedDependencies": {
+    "@vue-flow/core@1.48.2": "patches/vueFlowCore.patch"
+  },
   "workspaces": [
     "apps/*",
     "packages/*",

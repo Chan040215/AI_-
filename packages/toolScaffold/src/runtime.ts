@@ -49,7 +49,9 @@ export interface NodeToolCall {
 }
 
 export interface NodeToolsContext {
-  tools: NodeToolInfo[];
+  readonly tools: NodeToolInfo[];
+  readonly version: number;
+  list(nodeIds: string[], names?: string[]): IterableIterator<NodeToolInfo>;
   call(request: NodeToolCall, signal?: AbortSignal): Promise<unknown>;
 }
 

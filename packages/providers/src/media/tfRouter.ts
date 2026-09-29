@@ -80,7 +80,7 @@ async function generateTask(context: ProviderContext, mediaType: "image" | "vide
     const status = String(result.status ?? data.status ?? "").toLowerCase();
     if (status === "success" || status === "completed") return mediaAsset(data.data, mediaType);
     if (status === "failed" || status === "failure") {
-      throw new Error(typeof data.failReason === "string" ? data.failReason : `${mediaType === "image" ? "图片" : "视频"}生成失败`);
+      throw new Error(context.tool.errorMessage?.(result) || (typeof data.failReason === "string" ? data.failReason : `${mediaType === "image" ? "图片" : "视频"}生成失败`));
     }
     await wait(signal);
   }

@@ -19,6 +19,13 @@
       </div>
       <div class="developerRow">
         <div class="toolDescription">
+          <h3>更新说明</h3>
+          <p>打开当前版本的更新说明弹窗。</p>
+        </div>
+        <el-button :icon="IconFileText" :loading="openingUpdateBox" @click="openUpdateBox">查看更新说明</el-button>
+      </div>
+      <div class="developerRow">
+        <div class="toolDescription">
           <h3>供应商开发工具</h3>
           <p>授权读取本地供应商文件，调试生成接口与媒体结果。</p>
         </div>
@@ -103,6 +110,7 @@
     </div>
     <providerDebugDialog v-if="providerDebugVisible" v-model="providerDebugVisible" />
     <systemPromptDialog v-if="systemPromptVisible" v-model="systemPromptVisible" />
+    <updateBox v-if="updateBoxVisible" v-model="updateBoxVisible" :version="updateBoxBuild.version" :buildCode="updateBoxBuild.hash" />
     <div v-if="developerLocked" class="developerConfirm">
       <icon-code :size="28" aria-hidden="true" />
       <h3>确认进入开发者选项</h3>
@@ -118,11 +126,13 @@ import { useRouter } from "vue-router";
 import { useDeveloperStore } from "@/stores/developer";
 import { useHelloStore } from "@/stores/hello";
 import { saveSettings, settings } from "@/stores/settings";
+import { desktopUpdateSnapshot } from "@/stores/desktopUpdate";
+import type { updateSnapshot } from "@toonflow/server/desktop";
 import saveFile from "@/lib/saveFile";
 import { installPluginFile } from "../../installPluginFile";
 import { ElMessage } from "element-plus";
 import axios from "axios";
-import { IconCode, IconTerminal2, IconFileUpload, IconDownload, IconRefresh, IconEdit, IconTrash } from "@tabler/icons-vue";
+import { IconCode, IconTerminal2, IconFileUpload, IconFileText, IconDownload, IconRefresh, IconEdit, IconTrash } from "@tabler/icons-vue";
 
 const developerStore = useDeveloperStore();
 const hello = useHelloStore();
@@ -132,10 +142,31 @@ const providerDebugDialog = defineAsyncComponent(() => import("./providerDebugDi
 const providerDebugVisible = ref(false);
 const systemPromptDialog = defineAsyncComponent(() => import("./systemPromptDialog.vue"));
 const systemPromptVisible = ref(false);
+const updateBox = defineAsyncComponent(() => import("@/components/updateBox.vue"));
+const updateBoxVisible = ref(false);
+const openingUpdateBox = ref(false);
+const updateBoxBuild = ref({ version: import.meta.env.appVersion ?? "", hash: import.meta.env.DEV ? "dev" : "未提供" });
 const developerLocked = computed(() => !developerStore.developerConfirmed);
 const customUpdateUrl = ref(typeof settings.value.desktopUpdateCustomUrl === "string" ? settings.value.desktopUpdateCustomUrl : "");
 const savingUpdateUrl = ref(false);
 const updateUrlError = ref("");
+
+async function openUpdateBox() {
+  if (openingUpdateBox.value) return;
+  openingUpdateBox.value = true;
+  try {
+    if (isDesktop) {
+      const snapshot = desktopUpdateSnapshot.value ?? (await axios.get<{ data: updateSnapshot }>("/api/desktop/update", { timeout: 10000 })).data.data;
+      if (!snapshot?.version || !snapshot.hash) throw new Error("未能读取当前版本和构建代码，请重试。");
+      updateBoxBuild.value = { version: snapshot.version, hash: snapshot.hash };
+    }
+    updateBoxVisible.value = true;
+  } catch (error) {
+    ElMessage.error(axios.isAxiosError<{ message?: string }>(error) ? error.response?.data?.message || error.message : error instanceof Error ? error.message : "读取版本信息失败");
+  } finally {
+    openingUpdateBox.value = false;
+  }
+}
 
 async function saveCustomUpdateUrl() {
   if (savingUpdateUrl.value) return;

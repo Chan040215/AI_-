@@ -3,7 +3,8 @@ import { basename, dirname, resolve } from "node:path";
 import { readFile, readdir } from "node:fs/promises";
 import { calculateContextTokens, estimateTokens, getLastAssistantUsage, parseSessionEntries, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AgentSession, FileEntry, SessionEntry } from "@earendil-works/pi-coding-agent";
-import type { AgentEvent, AgentSubAgent, AgentToolCall } from "@/agent/runtime/types";
+import type { AgentEvent, AgentMention, AgentSubAgent, AgentToolCall } from "@/agent/runtime/types";
+import { agentMentionsSchema } from "@/agent/runtime/mentions";
 import conf from "@/utils/conf";
 import { providerSchema, getModelLimits } from "@/utils/ai";
 import { lockWorkspaceFiles, resolveWorkspacePath, writeWorkspaceFile } from "@/utils/workspace/files";
@@ -21,11 +22,13 @@ export const agentAttachmentsSchema = z
 export type ActiveAgentSession = {
   history: SessionManager; session?: AgentSession; send: (event: AgentEvent) => void;
   entryOffset: number; tools: Map<string, AgentToolCall>;
+  abort(): Promise<void>;
 };
 type SessionMessage = {
   id: string; entryId: string; role: "user" | "assistant"; content: string; replyTo?: string; error?: string;
   streaming?: boolean;
   attachments?: z.infer<typeof agentAttachmentsSchema>; report?: { file: string; name: string };
+  mentions?: AgentMention[];
   parts: ({ id: string; type: "text" | "thinking"; content: string; collapsed?: boolean } | { id: string; type: "tool"; tool: AgentToolCall })[];
 };
 // ACT: 复用正在运行的 SDK 会话，文件锁仍由 run 持有；多进程部署时需共享会话所有权。
@@ -34,6 +37,22 @@ const sessionKey = (path: string) => process.platform === "win32" ? resolve(path
 
 export function getActiveAgentSession(path: string) {
   return activeSessions.get(sessionKey(path));
+}
+
+export function hasPendingAgentQuestion(active: ActiveAgentSession, visited = new Set<ActiveAgentSession>()): boolean {
+  if (visited.has(active)) return false;
+  visited.add(active);
+  const tools = [...active.tools.values()];
+  if (tools.some(tool => tool.status === "running" && tool.question)) return true;
+  if (!tools.some(tool => tool.name === "subAgent" && tool.status === "running")) return false;
+  const path = active.history.getSessionFile()!;
+  return active.history.getEntries().some(entry => {
+    if (entry.type !== "custom" || entry.customType !== "toonflowSubAgent") return false;
+    const file = (entry.data as AgentSubAgent | undefined)?.file;
+    if (!file || !/^[\w-]+\.jsonl$/.test(file)) return false;
+    const child = getActiveAgentSession(resolve(dirname(path), file));
+    return !!child && getParentSessionFile(child.history) === basename(path) && hasPendingAgentQuestion(child, visited);
+  });
 }
 
 export function trackAgentEvent(cwd: string, file: string | undefined, event: AgentEvent) {
@@ -252,7 +271,7 @@ export async function getAgentSession(cwd: string, path: string) {
   const attachmentMessages = new Map(
     branch.flatMap((entry) => {
       if (entry.type !== "custom" || !["toonflowAttachments", "toonflowUserMessage"].includes(entry.customType)) return [];
-      const parsed = z.object({ messageId: z.string(), content: z.string(), attachments: agentAttachmentsSchema }).safeParse(entry.data);
+      const parsed = z.object({ messageId: z.string(), content: z.string(), attachments: agentAttachmentsSchema, mentions: agentMentionsSchema.optional() }).safeParse(entry.data);
       return parsed.success ? [[parsed.data.messageId, parsed.data] as const] : [];
     })
   );
@@ -323,6 +342,7 @@ export async function getAgentSession(cwd: string, path: string) {
         parts,
         error,
         attachments,
+        mentions: attachmentMessage?.mentions,
         report: undefined,
       },
     ];
@@ -344,7 +364,7 @@ export async function getAgentSession(cwd: string, path: string) {
     message.role === "assistant" && !message.report && message.replyTo === latestUser.id && messageIndices.has(message.entryId)
   ) : undefined;
   if (activeReply) activeReply.streaming = true;
-  const messages = groupedMessages.filter((message) => message.content || message.parts.length || message.error || message.attachments?.length);
+  const messages = groupedMessages.filter((message) => message.content || message.parts.length || message.error || message.attachments?.length || message.mentions?.length);
   const firstUserMessage = messages.find((item) => item.role === "user");
   const context = history.buildSessionContext();
   const lastReply = history.getBranch().findLast((entry) => entry.type === "message" && entry.message.role === "assistant");

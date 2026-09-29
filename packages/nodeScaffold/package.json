@@ -18,6 +18,7 @@
     "./nodeTools": "./src/nodeTools.ts",
     "./promptInput": "./src/components/promptInput.vue",
     "./videoPlayer": "./src/components/videoPlayer.vue",
+    "./mediaHistory": "./src/components/mediaHistory.vue",
     "./referenceItem": "./src/components/referenceItem.vue"
   },
   "scripts": {

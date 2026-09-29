@@ -69,6 +69,7 @@ const settingsVisible = ref(false);
 const canvasPanelRef = ref<InstanceType<typeof canvasPanel>>();
 const documentPanelRef = ref<InstanceType<typeof documentPanel>>();
 provide("canvas", () => canvasPanelRef.value?.getCanvasContext());
+provide("mentionCanvas", () => canvasPanelRef.value?.mentionSource);
 provide("activateCanvasPanel", () => switchPanel("canvas"));
 
 const controlLifetime = new AbortController();

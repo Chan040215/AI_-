@@ -10,6 +10,7 @@
     :bottomWidth="660"
     :style="{ width: previewUrl && imageWidth ? `${imageWidth + 18}px` : undefined }">
     <template #topActions>
+      <mediaHistory mediaType="image" :current="outputFile" :disabled="generating || deleting || uploading" @select="outputs.image = { dataType: 'IMAGE', value: $event }" />
       <el-button :icon="IconTransfer" :loading="uploading" :disabled="generating || deleting" text title="替换图片" aria-label="替换图片" @click.stop="fileInput?.click()" />
       <input ref="fileInput" type="file" accept="image/*" hidden aria-label="选择替换图片" :disabled="generating || deleting || uploading" @change="replaceOutput" />
     </template>
@@ -21,7 +22,7 @@
         draggable="false"
         alt="生成图片"
         @load="resizeImage"
-        @error="ElMessage.error('无法预览该图片')" />
+        @error="showNodeError('无法预览该图片', '图片预览失败')" />
       <div v-else class="imageEmpty" role="img" aria-label="暂无生成图片">
         <icon-photo-ai :size="48" stroke="1.25" aria-hidden="true" />
       </div>
@@ -45,7 +46,7 @@
             aria-label="生成模型"
             noDataText="请先在设置中添加图片模型"
             placement="top-start"
-            @visible-change="(visible) => visible && loadModels().catch((error) => showError(error, '模型读取失败'))">
+            @visible-change="(visible) => visible && loadModels().catch((error) => showNodeError(error, '模型读取失败'))">
             <template #prefix><icon-sparkles :size="17" /></template>
             <el-option-group v-for="provider in modelGroups" :key="provider.id" :label="provider.label">
               <el-option
@@ -67,7 +68,7 @@
             :disabled="deleting || uploading || (!generating && (!generationPrompt || !selectedModel))"
             :title="generating ? '停止生成' : '生成图片'"
             :aria-label="generating ? '停止生成' : '生成图片'"
-            @click="generating ? generationController?.abort() : startGeneration().catch((error) => showError(error, '图片生成失败'))" />
+            @click="generating ? generationController?.abort() : startGeneration().catch((error) => showNodeError(error, '图片生成失败'))" />
         </div>
       </el-card>
     </template>
@@ -81,11 +82,12 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from "vue";
-import { ElButton, ElCard, ElSelect, ElOption, ElOptionGroup, ElMessage, ElLoading, ElImageViewer } from "element-plus";
+import { ElButton, ElCard, ElSelect, ElOption, ElOptionGroup, ElLoading, ElImageViewer } from "element-plus";
 import { IconPhotoAi, IconSparkles, IconArrowUp, IconPlayerStop, IconTransfer } from "@tabler/icons-vue";
-import { groupNodeModels, nodeSkeleton, nodeTools, useNode, useNodeGeneration, useNodeReferences, z, type NodeMediaModel, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
+import { groupNodeModels, nodeSkeleton, nodeTools, showNodeError, useNode, useNodeGeneration, useNodeReferences, z, type NodeMediaModel, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
 import promptInput from "@toonflow/nodes-scaffold/promptInput";
 import referenceItem from "@toonflow/nodes-scaffold/referenceItem";
+import mediaHistory from "@toonflow/nodes-scaffold/mediaHistory";
 import generationSettings from "./components/generationSettings.vue";
 
 defineOptions({
@@ -148,10 +150,10 @@ const generationPrompt = computed(() =>
 const outputFile = computed(() => outputs.value.image?.dataType === "IMAGE" ? outputs.value.image.value : undefined);
 const previewUrl = files.useFileUrl(
   outputFile,
-  (error) => showError(error, "图片读取失败")
+  (error) => showNodeError(error, "图片读取失败")
 );
 
-onMounted(() => loadModels().catch((error) => showError(error, "模型读取失败")));
+onMounted(() => loadModels().catch((error) => showNodeError(error, "模型读取失败")));
 onScopeDispose(() => {
   disposed = true;
   generationController?.abort();
@@ -162,8 +164,8 @@ async function replaceOutput(event: Event) {
   const file = input.files?.[0];
   input.value = "";
   if (!file || generating.value || deleting.value || uploading.value || disposed) return;
-  if (!file.type.startsWith("image/")) return void ElMessage.error("请选择图片文件");
-  if (!file.size || file.size > 100 * 1024 * 1024) return void ElMessage.error("图片不能为空且不能超过 100 MB");
+  if (!file.type.startsWith("image/")) return void showNodeError("请选择图片文件", "图片替换失败");
+  if (!file.size || file.size > 100 * 1024 * 1024) return void showNodeError("图片不能为空且不能超过 100 MB", "图片替换失败");
   uploading.value = true;
   try {
     const workspace = files.getWorkspaceFiles();
@@ -175,7 +177,7 @@ async function replaceOutput(event: Event) {
     // ACT: 保留历史输出文件，避免破坏撤销记录和复制节点的引用。
     outputs.value.image = { dataType: "IMAGE", value: { url, mimeType: file.type } };
   } catch (error) {
-    showError(error, "图片替换失败");
+    showNodeError(error, "图片替换失败");
   } finally {
     uploading.value = false;
   }
@@ -231,7 +233,7 @@ async function startGeneration() {
       if (!result) throw new Error("供应商未返回图片");
       outputs.value.image = { dataType: "IMAGE", value: { url: result.path, mimeType: result.mimeType } };
     }))
-    .catch((error) => showError(error, "图片生成失败"))
+    .catch((error) => showNodeError(error, "图片生成失败"))
     .finally(() => {
       generationController = undefined;
     });
@@ -259,12 +261,6 @@ async function resizeImage(event: Event) {
   imageWidth.value = (240 * image.naturalWidth) / image.naturalHeight;
   await nextTick();
   updateNodeInternals();
-}
-
-function showError(error: unknown, fallback: string) {
-  if (error instanceof Error && error.name === "AbortError") return;
-  const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
-  ElMessage.error(message || (error instanceof Error ? error.message : fallback));
 }
 
 function getConfig() {

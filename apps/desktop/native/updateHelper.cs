@@ -21,32 +21,6 @@ internal static class updateHelper
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern uint GetPrivateProfileString(string section, string key, string fallback, StringBuilder value, uint size, string path);
 
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct startupInfo
-    {
-        public int size;
-        public string reserved, desktop, title;
-        public int x, y, width, height, charsX, charsY, fill, flags;
-        public short showWindow, reservedSize;
-        public IntPtr reservedBytes, input, output, error;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct processInformation
-    {
-        public IntPtr process, thread;
-        public int processId, threadId;
-    }
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CreateProcessW(string application, StringBuilder commandLine, IntPtr processAttributes, IntPtr threadAttributes,
-        bool inheritHandles, uint creationFlags, IntPtr environment, string currentDirectory, ref startupInfo startup, out processInformation process);
-
-    [DllImport("kernel32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CloseHandle(IntPtr handle);
-
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CreateDirectoryW(string path, IntPtr securityAttributes);
@@ -66,7 +40,7 @@ internal static class updateHelper
             ensurePlainPath(planPath);
             if (args[0] == "--spawn-update")
             {
-                spawnUpdate(planPath, quiet);
+                spawnScheduledUpdate(Process.GetCurrentProcess().MainModule.FileName, planPath, quiet);
                 return 0;
             }
             if (args[0] == "--apply-scheduled-update") scheduledTaskFolder().DeleteTask(scheduledTaskName(planPath), 0);
@@ -163,24 +137,6 @@ internal static class updateHelper
         }
     }
 
-    private static void spawnUpdate(string planPath, bool quiet)
-    {
-        string executable = Process.GetCurrentProcess().MainModule.FileName;
-        var startup = new startupInfo { size = Marshal.SizeOf(typeof(startupInfo)) };
-        processInformation child;
-        // CREATE_BREAKAWAY_FROM_JOB 避免 Bun/launcher 的 Job 随主应用退出而终止助手。
-        if (!CreateProcessW(executable, new StringBuilder(quote(executable) + " --apply-update " + quote(planPath) + (quiet ? " --quiet" : "")),
-            IntPtr.Zero, IntPtr.Zero, false, 0x01000000 | 0x08000000, IntPtr.Zero, Path.GetDirectoryName(executable), ref startup, out child))
-        {
-            int error = Marshal.GetLastWin32Error();
-            if (error != 5) throw new Win32Exception(error, "无法启动独立更新进程。");
-            spawnScheduledUpdate(executable, planPath, quiet);
-            return;
-        }
-        CloseHandle(child.thread);
-        CloseHandle(child.process);
-    }
-
     private static string scheduledTaskName(string planPath)
     {
         string name = Path.GetFileNameWithoutExtension(planPath);
@@ -197,7 +153,7 @@ internal static class updateHelper
 
     private static void spawnScheduledUpdate(string executable, string planPath, bool quiet)
     {
-        // ACT: 仅在宿主 Job 禁止 breakaway 时借助系统任务服务；不提权、不设置触发器、不保留任务。
+        // ACT: breakaway 成功仍可能留在外层 Job，统一由当前用户的任务服务启动；不提权、不设置触发器，启动后删除任务。
         string taskName = scheduledTaskName(planPath);
         dynamic scheduler = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service", true));
         scheduler.Connect();

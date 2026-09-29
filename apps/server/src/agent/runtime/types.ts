@@ -2,6 +2,16 @@ import type { CanvasToolCall, QuestionRequest, ToolCall } from "@toonflow/tools-
 
 export type AgentToolCall = ToolCall & { question?: QuestionRequest & { callId: string } };
 
+export type AgentMention = {
+  id: string;
+  label: string;
+  source:
+    | { kind: "canvas"; canvasId: string; canvasName: string; nodeId: string; nodeName: string; outputId: string; outputName: string }
+    | { kind: "asset"; path: string };
+  dataType: string;
+  value: unknown;
+};
+
 export type AgentStats = {
   tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
   tokensPerSecond?: number;
@@ -29,7 +39,7 @@ export type AgentEvent =
   | ({ type: "question"; callId: string; toolCallId: string } & QuestionRequest)
   | { type: "error"; message: string }
   | { type: "session"; file: string }
-  | { type: "userMessage"; id: string; content?: string; attachments?: { name: string; path: string; mimeType: string }[] }
+  | { type: "userMessage"; id: string; content?: string; attachments?: { name: string; path: string; mimeType: string }[]; mentions?: AgentMention[] }
   | { type: "subAgent"; agent: AgentSubAgent }
   | { type: "subAgentEvent"; file: string; event: AgentEvent }
   | { type: "report"; parentFile: string; file: string; name: string; content: string; id: string }

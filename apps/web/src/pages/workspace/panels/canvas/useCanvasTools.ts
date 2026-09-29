@@ -1,8 +1,9 @@
-import { nextTick, type Ref } from "vue";
+import { nextTick, watch, type Ref } from "vue";
 import { useVueFlow, type XYPosition } from "@vue-flow/core";
 import { useNodeEvent, useNodeToolsContext, validateConnection } from "@toonflow/nodes-scaffold/runtime";
 import { canvasSchemas, type CanvasContext, type CanvasToolCall } from "@toonflow/tool-canvas/runtime";
 import { arrangeCanvas } from "./arrangeCanvas";
+import { canvasEdgeSummary, canvasNodeSummary, createCanvasQueries, isCanvasRead } from "./canvasQueries";
 
 export function useCanvasTools(options: {
   availableNodes: Ref<{ type: string; label: string }[]>;
@@ -18,6 +19,23 @@ export function useCanvasTools(options: {
 }) {
   const flow = useVueFlow();
   const getNodeTools = useNodeToolsContext();
+  let nodeRevision = 0;
+  let edgeRevision = 0;
+  // 只跟踪列表结构，不深读节点 data；批量更新合并到同一 tick。
+  watch(flow.nodes, () => nodeRevision++, { deep: 1 });
+  watch(flow.edges, () => edgeRevision++, { deep: 1 });
+  const readCanvas = createCanvasQueries({
+    nodes: () => flow.nodes.value,
+    edges: () => flow.edges.value,
+    findNode: flow.findNode,
+    viewport: () => flow.viewport.value,
+    selectedCount: () => flow.getSelectedNodes.value.length,
+    nodeRevision: () => nodeRevision,
+    edgeRevision: () => edgeRevision,
+    canvases: () => options.menu().getCanvases(),
+    nodeTypes: () => options.availableNodes.value,
+    nodeTools: getNodeTools,
+  });
 
   function findNode(nodeId: string) {
     const node = flow.findNode(nodeId);
@@ -25,12 +43,9 @@ export function useCanvasTools(options: {
     return node;
   }
 
-  function nodeInfo(nodeId: string, snapshot = flow.toObject()) {
-    findNode(nodeId);
-    return {
-      node: snapshot.nodes.find(node => node.id === nodeId),
-      nodeTools: getNodeTools().tools.filter(tool => tool.nodeId === nodeId),
-    };
+  function nodeInfo(nodeId: string) {
+    const node = findNode(nodeId);
+    return { node: { ...canvasNodeSummary(node), position: { x: node.position.x, y: node.position.y } } };
   }
 
   function nodePosition(position: XYPosition) {
@@ -43,7 +58,8 @@ export function useCanvasTools(options: {
     let redirected: CanvasContext | undefined;
     return {
       get id() { return redirected?.id ?? options.getCanvasBinding().id; },
-      get tools() { return redirected?.tools ?? getNodeTools().tools; },
+      // 函数定义通过 getNodeTools 按需发现，初始化消息不携带节点清单。
+      tools: [],
       getNodeLabel(nodeId) {
         if (redirected) return redirected.getNodeLabel?.(nodeId);
         const node = flow.findNode(nodeId);
@@ -77,7 +93,7 @@ export function useCanvasTools(options: {
                 canvasSignal = binding.signal;
                 result = await execute({ name: "getCanvas", args: {} }, callSignal, id);
               }
-              if (request.name !== "getCanvas" && request.name !== "selectNodes") await options.flushSave();
+              if (!isCanvasRead(request.name) && request.name !== "selectNodes") await options.flushSave();
               callSignal.throwIfAborted();
               canvasSignal.throwIfAborted();
               return result;
@@ -96,18 +112,12 @@ export function useCanvasTools(options: {
 
   async function execute(request: CanvasToolCall, signal: AbortSignal, canvasId: string): Promise<unknown> {
     signal.throwIfAborted();
+    if (isCanvasRead(request.name)) {
+      await nextTick();
+      signal.throwIfAborted();
+      return readCanvas(request, canvasId, signal);
+    }
     switch (request.name) {
-      case "getCanvas": {
-        canvasSchemas.getCanvas.parse(request.args);
-        return {
-          id: canvasId,
-          canvases: options.menu().getCanvases(),
-          ...flow.toObject(),
-          selectedNodeIds: flow.getSelectedNodes.value.map(node => node.id),
-          availableNodeTypes: options.availableNodes.value,
-          nodeTools: getNodeTools().tools,
-        };
-      }
       case "addCanvas": {
         const { name } = canvasSchemas.addCanvas.parse(request.args);
         return options.menu().addCanvas(name, signal);
@@ -152,23 +162,21 @@ export function useCanvasTools(options: {
         const edgeIds = flow.getEdges.value.filter(edge => idSet.has(edge.source) || idSet.has(edge.target)).map(edge => edge.id);
         flow.removeNodes(nodeIds, true);
         await nextTick();
-        return { nodeIds, removedEdgeIds: edgeIds };
+        return { nodeIds, removedEdgeIds: edgeIds.slice(0, 100), removedEdgeCount: edgeIds.length, truncated: edgeIds.length > 100 };
       }
       case "moveNodes": {
         const { moves } = canvasSchemas.moveNodes.parse(request.args);
         moves.forEach(move => { if (findNode(move.nodeId).draggable === false) throw new Error(`节点不允许移动：${move.nodeId}`); });
         moves.forEach(move => flow.updateNode(move.nodeId, { position: nodePosition(move.position) }));
         await nextTick();
-        const snapshot = flow.toObject();
-        return { nodes: moves.map(move => nodeInfo(move.nodeId, snapshot)) };
+        return { nodes: moves.map(move => nodeInfo(move.nodeId)) };
       }
       case "renameNodes": {
         const { renames } = canvasSchemas.renameNodes.parse(request.args);
         renames.forEach(rename => findNode(rename.nodeId));
         renames.forEach(rename => flow.updateNodeData(rename.nodeId, { label: rename.label }));
         await nextTick();
-        const snapshot = flow.toObject();
-        return { nodes: renames.map(rename => nodeInfo(rename.nodeId, snapshot)) };
+        return { nodes: renames.map(rename => nodeInfo(rename.nodeId)) };
       }
       case "connectNodes": {
         const { connections } = canvasSchemas.connectNodes.parse(request.args);
@@ -196,8 +204,7 @@ export function useCanvasTools(options: {
         });
         flow.addEdges(entries.filter(entry => entry.isNew).map(entry => ({ id: entry.id, ...entry.connection })));
         await nextTick();
-        const toObject = flow.toObject();
-        return { edges: entries.map(entry => toObject.edges.find(edge => edge.id === entry.id)) };
+        return { edges: entries.map(entry => canvasEdgeSummary(flow.findEdge(entry.id)!)) };
       }
       case "deleteEdges": {
         const { edgeIds } = canvasSchemas.deleteEdges.parse(request.args);
@@ -206,14 +213,13 @@ export function useCanvasTools(options: {
           if (!edge) throw new Error(`连线不存在：${edgeId}`);
           if (edge.deletable === false) throw new Error(`连线不允许删除：${edgeId}`);
         });
-        const snapshot = flow.toObject();
         const nodeIds = [...new Set(edgeIds.flatMap(id => {
           const edge = flow.findEdge(id)!;
           return [edge.source, edge.target];
         }))];
         flow.removeEdges(edgeIds);
         await nextTick();
-        return { edgeIds, nodes: nodeIds.map(id => nodeInfo(id, snapshot)) };
+        return { edgeIds, nodes: nodeIds.map(id => nodeInfo(id)) };
       }
       case "selectNodes": {
         const { nodeIds } = canvasSchemas.selectNodes.parse(request.args);
@@ -222,12 +228,13 @@ export function useCanvasTools(options: {
         flow.removeSelectedElements();
         flow.addSelectedNodes(nodes);
         await nextTick();
-        return { selectedNodeIds: flow.getSelectedNodes.value.map(node => node.id) };
+        const selected = flow.getSelectedNodes.value;
+        return { selectedNodeIds: selected.slice(0, 100).map(node => node.id), selectedCount: selected.length, truncated: selected.length > 100 };
       }
       case "arrangeCanvas": {
         canvasSchemas.arrangeCanvas.parse(request.args);
         const { arrangedNodeIds, viewport } = await arrangeCanvas(flow, signal);
-        return { arrangedNodeIds, viewport };
+        return { arrangedNodeIds: arrangedNodeIds.slice(0, 100), arrangedCount: arrangedNodeIds.length, truncated: arrangedNodeIds.length > 100, viewport };
       }
       case "fitCanvas": {
         const { nodeIds } = canvasSchemas.fitCanvas.parse(request.args);
@@ -237,7 +244,7 @@ export function useCanvasTools(options: {
         flow.updateNodeInternals(nodeIds ?? flow.getNodes.value.map(node => node.id));
         const fitted = await flow.fitView({ nodes: nodeIds, padding: 0.2, duration: 0 });
         signal.throwIfAborted();
-        return { fitted, nodeIds: nodeIds ?? flow.getNodes.value.map(node => node.id), viewport: flow.toObject().viewport };
+        return { fitted, nodeIds: nodeIds?.slice(0, 100), nodeCount: nodeIds?.length ?? flow.nodes.value.length, truncated: (nodeIds?.length ?? 0) > 100, viewport: { ...flow.viewport.value } };
       }
       case "nodeTools": {
         const args = canvasSchemas.nodeTools.parse(request.args);

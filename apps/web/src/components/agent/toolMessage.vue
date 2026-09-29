@@ -58,7 +58,7 @@ onErrorCaptured(error => {
   rendererError.value = error.message;
   return false;
 });
-const collapsed = ref(true);
+const collapsed = defineModel<boolean>("collapsed", { default: true });
 const toolStatusLabels = { running: "调用中…", success: "已完成", error: "调用失败", interrupted: "已中断" };
 const toolCodeOptions = { maxHeight: 240, lineNumbers: false };
 const args = computed(() => formatToolData(tool.args));

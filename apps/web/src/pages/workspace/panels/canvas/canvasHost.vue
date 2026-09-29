@@ -23,6 +23,9 @@ import { computed, onScopeDispose, provide, shallowReactive, shallowRef, ref, wa
 import type { CanvasContext } from "@toonflow/tool-canvas/runtime";
 import { waitForControlValue } from "@/lib/mcpControl";
 import canvasPanel from "./index.vue";
+import useWorkspaceFiles from "@/lib/workspaceFiles";
+import { useWorkspaceStore } from "@/stores/workspace";
+import { createCanvasMention, mentionNodeOutputs, queryMentionNodes, type MentionCanvasSource } from "@toonflow/server/agent/mentionSources";
 
 const props = withDefaults(defineProps<{ active?: boolean; settingsVisible?: boolean }>(), { active: true, settingsVisible: false });
 type CanvasInstance = InstanceType<typeof canvasPanel>;
@@ -33,6 +36,7 @@ const activeInstance = computed(() => instances.get(activeKey.value));
 const canvasId = computed(() => activeInstance.value?.canvasId ?? "");
 const canvasReady = computed(() => activeInstance.value?.canvasReady ?? false);
 const lifetime = new AbortController();
+const workspaceStore = useWorkspaceStore();
 const canvases = shallowRef<{ id: string }[]>([]);
 provide("canvasList", canvases);
 provide("canvasAssetNodes", (id: string) => [...instances.values()].find(panel => panel.canvasId === id)?.getRetainedNodes() ?? []);
@@ -117,7 +121,43 @@ function cancelSave() {
   for (const panel of instances.values()) panel.cancelSave();
 }
 
+function mentionInstance(canvasId: string) {
+  return [...instances.values()].find(panel => panel.canvasId === canvasId);
+}
+
+const mentionSource: MentionCanvasSource = {
+  currentCanvasId: () => canvasId.value,
+  canvases: () => canvases.value.map(canvas => ({ id: canvas.id, name: canvas.id.replace(/\.json$/i, "") })),
+  nodes(canvasId, options) {
+    const panel = mentionInstance(canvasId);
+    if (!panel) return;
+    const nodes = panel.getMentionNodes();
+    return queryMentionNodes(nodes, `${workspaceStore.project?.directory}:${canvasId}:${nodes.length}`, options);
+  },
+  outputs(canvasId, nodeId) {
+    const panel = mentionInstance(canvasId);
+    if (!panel) return;
+    const node = panel.findMentionNode(nodeId);
+    if (!node) throw new Error("节点已删除，请重新选择");
+    return mentionNodeOutputs(node);
+  },
+  selectCanvas(canvasId, nodeId, outputId) {
+    const panel = mentionInstance(canvasId);
+    if (!panel) return;
+    const node = panel.findMentionNode(nodeId);
+    if (!node) throw new Error("节点已删除，请重新选择");
+    const directory = workspaceStore.project?.directory;
+    if (!directory) throw new Error("请先打开工作区");
+    return createCanvasMention(node, canvasId, outputId, async path => {
+      const text = await useWorkspaceFiles(directory).readText(path, 400001);
+      if (text.length > 100000) throw new Error("文本引用最多支持 100000 个字符，请缩小内容后重试");
+      return text;
+    });
+  },
+};
+
 defineExpose({ canvasId, canvasReady, getCanvasContext, readDocumentNode, saveDocumentNode, flushSave, cancelSave,
+  mentionSource,
   get saveBusy() { return [...instances.values()].some(panel => panel.saveBusy); },
 });
 </script>

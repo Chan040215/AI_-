@@ -15,6 +15,7 @@
     "@form-create/element-ui": "^3",
     "@markmend/ast": "1.1.0",
     "@tabler/icons-vue": "^3.46.0",
+    "@tanstack/vue-virtual": "3.13.39",
     "@tdesign-vue-next/chat": "^0.7.0",
     "@tiptap/core": "3.31.3",
     "@tiptap/extension-find-and-replace": "3.31.3",

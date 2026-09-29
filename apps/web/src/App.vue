@@ -6,19 +6,53 @@
       </transition>
     </router-view>
     <ffmpegRequired />
+    <updateBox
+      v-if="updateBoxBuild"
+      v-model="updateBoxVisible"
+      :version="updateBoxBuild.version"
+      :buildCode="updateBoxBuild.hash"
+      @opened="rememberUpdateBox"
+      @close="rememberUpdateBox" />
   </el-config-provider>
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watchEffect } from "vue";
-import { useZIndex } from "element-plus";
+import { onBeforeUnmount, ref, shallowRef, watch, watchEffect } from "vue";
+import { ElMessage, useZIndex } from "element-plus";
 import zhCn from "element-plus/es/locale/lang/zh-cn";
-import { uiSettings } from "@/stores/settings";
+import { saveSettings, settings, uiSettings } from "@/stores/settings";
+import { desktopUpdateSnapshot } from "@/stores/desktopUpdate";
 import { useMcpControl } from "@/lib/mcpControl";
 import ffmpegRequired from "@/components/settings/ffmpegRequired.vue";
+import updateBox from "@/components/updateBox.vue";
 import "element-plus/theme-chalk/dark/css-vars.css";
 
 useMcpControl();
+
+const updateBoxVisible = ref(false);
+const updateBoxBuild = shallowRef<{ version: string; hash: string }>();
+const shownUpdateBuilds = new Set<string>();
+const isDesktop = new URLSearchParams(window.location.search).get("desktop") === "1";
+
+watch(desktopUpdateSnapshot, snapshot => {
+  if (!isDesktop || !snapshot?.version || !snapshot.hash || snapshot.channel === "dev") return;
+  const buildKey = `${snapshot.version}:${snapshot.hash}`;
+  const seenBuilds = settings.value.updateBoxSeenBuilds;
+  if (shownUpdateBuilds.has(buildKey) || Array.isArray(seenBuilds) && seenBuilds.includes(buildKey)) return;
+  shownUpdateBuilds.add(buildKey);
+  updateBoxBuild.value = { version: snapshot.version, hash: snapshot.hash };
+  updateBoxVisible.value = true;
+}, { immediate: true });
+
+function rememberUpdateBox() {
+  if (!updateBoxBuild.value) return;
+  const buildKey = `${updateBoxBuild.value.version}:${updateBoxBuild.value.hash}`;
+  // ACT: 桌面端启动端口会变化，复用应用设置；展示完成或提前关闭时记录，保存队列内去重。
+  void saveSettings(current => {
+    const seenBuilds = Array.isArray(current.updateBoxSeenBuilds) ? current.updateBoxSeenBuilds.filter(value => typeof value === "string") : [];
+    return seenBuilds.includes(buildKey) ? undefined : { updateBoxSeenBuilds: [...seenBuilds, buildKey] };
+  }).catch(() => { ElMessage.warning("更新说明的展示记录保存失败，下次启动时可能再次显示。"); });
+}
 
 function preventPageZoom(event: WheelEvent) {
   if (event.ctrlKey || event.metaKey) event.preventDefault();

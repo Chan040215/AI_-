@@ -10,6 +10,7 @@
     :bottomWidth="660"
     :style="{ width: previewUrl && videoWidth ? `${videoWidth + 18}px` : undefined }">
     <template #topActions>
+      <mediaHistory mediaType="video" :current="outputFile" :disabled="generating || deleting || uploading" @select="outputs.video = { dataType: 'VIDEO', value: $event }" />
       <el-button :icon="IconTransfer" :loading="uploading" :disabled="generating || deleting" text title="替换视频" aria-label="替换视频" @click.stop="fileInput?.click()" />
       <input ref="fileInput" type="file" accept="video/*" hidden aria-label="选择替换视频" :disabled="generating || deleting || uploading" @change="replaceOutput" />
     </template>
@@ -46,7 +47,7 @@
             aria-label="生成模型"
             noDataText="请先在设置中添加视频模型"
             placement="top-start"
-            @visible-change="(visible) => visible && loadModels().catch((error) => showError(error, '模型读取失败'))">
+            @visible-change="(visible) => visible && loadModels().catch((error) => showNodeError(error, '模型读取失败'))">
             <template #prefix><icon-sparkles :size="17" /></template>
             <el-option-group v-for="provider in modelGroups" :key="provider.id" :label="provider.label">
               <el-option
@@ -71,7 +72,7 @@
             :disabled="deleting || uploading || (!generating && (!generationPrompt || !selectedModel))"
             :title="generating ? '停止生成' : '生成视频'"
             :aria-label="generating ? '停止生成' : '生成视频'"
-            @click="generating ? generationController?.abort() : startGeneration().catch((error) => showError(error, '视频生成失败'))" />
+            @click="generating ? generationController?.abort() : startGeneration().catch((error) => showNodeError(error, '视频生成失败'))" />
         </div>
       </el-card>
     </template>
@@ -80,12 +81,13 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from "vue";
-import { ElButton, ElCard, ElSelect, ElOption, ElOptionGroup, ElMessage, ElLoading } from "element-plus";
+import { ElButton, ElCard, ElSelect, ElOption, ElOptionGroup, ElLoading } from "element-plus";
 import { IconCameraAi, IconSparkles, IconArrowUp, IconPlayerStop, IconTransfer } from "@tabler/icons-vue";
-import { groupNodeModels, nodeSkeleton, nodeTools, useNode, useNodeGeneration, useNodeReferences, z, type NodeMediaModel, type NodeVideoRequest, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
+import { groupNodeModels, nodeSkeleton, nodeTools, showNodeError, useNode, useNodeGeneration, useNodeReferences, z, type NodeMediaModel, type NodeVideoRequest, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
 import promptInput from "@toonflow/nodes-scaffold/promptInput";
 import videoPlayer from "@toonflow/nodes-scaffold/videoPlayer";
 import referenceItem from "@toonflow/nodes-scaffold/referenceItem";
+import mediaHistory from "@toonflow/nodes-scaffold/mediaHistory";
 import generationSettings from "./components/generationSettings.vue";
 
 defineOptions({
@@ -189,10 +191,10 @@ const generationPrompt = computed(() =>
 const outputFile = computed(() => outputs.value.video?.dataType === "VIDEO" ? outputs.value.video.value : undefined);
 const previewUrl = files.useFileUrl(
   outputFile,
-  (error) => showError(error, "视频读取失败")
+  (error) => showNodeError(error, "视频读取失败")
 );
 
-onMounted(() => loadModels().catch((error) => showError(error, "模型读取失败")));
+onMounted(() => loadModels().catch((error) => showNodeError(error, "模型读取失败")));
 onScopeDispose(() => {
   disposed = true;
   generationController?.abort();
@@ -203,8 +205,8 @@ async function replaceOutput(event: Event) {
   const file = input.files?.[0];
   input.value = "";
   if (!file || generating.value || deleting.value || uploading.value || disposed) return;
-  if (!file.type.startsWith("video/")) return void ElMessage.error("请选择视频文件");
-  if (!file.size || file.size > 100 * 1024 * 1024) return void ElMessage.error("视频不能为空且不能超过 100 MB");
+  if (!file.type.startsWith("video/")) return void showNodeError("请选择视频文件", "视频替换失败");
+  if (!file.size || file.size > 100 * 1024 * 1024) return void showNodeError("视频不能为空且不能超过 100 MB", "视频替换失败");
   uploading.value = true;
   try {
     const workspace = files.getWorkspaceFiles();
@@ -216,7 +218,7 @@ async function replaceOutput(event: Event) {
     // ACT: 保留历史输出文件，避免破坏撤销记录和复制节点的引用。
     outputs.value.video = { dataType: "VIDEO", value: { url, mimeType: file.type } };
   } catch (error) {
-    showError(error, "视频替换失败");
+    showNodeError(error, "视频替换失败");
   } finally {
     uploading.value = false;
   }
@@ -281,7 +283,7 @@ async function startGeneration() {
       if (!result) throw new Error("供应商未返回视频");
       outputs.value.video = { dataType: "VIDEO", value: { url: result.path, mimeType: result.mimeType } };
     }))
-    .catch((error) => showError(error, "视频生成失败"))
+    .catch((error) => showNodeError(error, "视频生成失败"))
     .finally(() => {
       generationController = undefined;
     });
@@ -309,12 +311,6 @@ async function resizeVideo(event: Event) {
   videoWidth.value = Math.max(180, (240 * video.videoWidth) / video.videoHeight);
   await nextTick();
   updateNodeInternals();
-}
-
-function showError(error: unknown, fallback: string) {
-  if (error instanceof Error && error.name === "AbortError") return;
-  const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
-  ElMessage.error(message || (error instanceof Error ? error.message : fallback));
 }
 
 function getConfig() {

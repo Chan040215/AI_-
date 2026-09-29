@@ -27,10 +27,14 @@
       <el-dropdown-menu
         ref="menuList"
         class="nodeMenu"
-        :aria-label="menuLevel === 'selection' ? '选区操作' : menuLevel === 'actions' ? '操作菜单' : '添加节点'">
+        :aria-label="menuLevel === 'selection' ? '选区操作' : menuLevel === 'arrange' ? '整理选中节点' : menuLevel === 'actions' ? '操作菜单' : '添加节点'">
         <template v-if="menuLevel === 'selection'">
           <el-dropdown-item command="duplicateSelection" :icon="IconCopyPlus" :disabled="selectionBusy || deleting || !selectedNodes.length">
             创建副本
+          </el-dropdown-item>
+          <el-dropdown-item command="arrange" :icon="IconLayoutGrid" :disabled="!canArrangeSelection">
+            <span>整理选中节点</span>
+            <icon-chevron-right class="nextIcon" :size="14" />
           </el-dropdown-item>
           <el-dropdown-item
             command="deleteSelection"
@@ -38,6 +42,13 @@
             :disabled="selectionBusy || deleting || !selectedNodes.some((node) => node.deletable !== false)">
             {{ deleting ? "删除中…" : `删除选中节点（${selectedNodes.length}）` }}
           </el-dropdown-item>
+        </template>
+        <template v-else-if="menuLevel === 'arrange'">
+          <el-dropdown-item command="selection" :icon="IconChevronLeft">返回选区操作</el-dropdown-item>
+          <el-divider />
+          <el-dropdown-item command="horizontal" :icon="IconLayoutColumns" :disabled="!canArrangeSelection">水平排列</el-dropdown-item>
+          <el-dropdown-item command="vertical" :icon="IconLayoutRows" :disabled="!canArrangeSelection">垂直排列</el-dropdown-item>
+          <el-dropdown-item command="grid" :icon="IconLayoutGrid" :disabled="!canArrangeSelection">宫格排列</el-dropdown-item>
         </template>
         <template v-else-if="menuLevel === 'actions'">
           <el-dropdown-item command="upload" :icon="IconUpload" :disabled="!uploadFiles">上传</el-dropdown-item>
@@ -74,7 +85,8 @@ import { ElMessage } from "element-plus";
 import type { DropdownInstance } from "element-plus";
 import selectionHandle from "./selectionHandle.vue";
 import { getSelectionConnections } from "../selectionConnections";
-import { getSelectionTree } from "../selectionNodes";
+import { getSelectionRoots, getSelectionTree } from "../selectionNodes";
+import { arrangeSelection } from "../arrangeSelection";
 import {
   IconClipboard,
   IconCopyPlus,
@@ -86,6 +98,9 @@ import {
   IconArrowForwardUp,
   IconChevronLeft,
   IconChevronRight,
+  IconLayoutColumns,
+  IconLayoutRows,
+  IconLayoutGrid,
 } from "@tabler/icons-vue";
 
 const { remoteNodes = [], pasteNode, uploadFiles, canUndo = false, canRedo = false, selectionBusy = false, batchHistory } = defineProps<{
@@ -100,7 +115,7 @@ const { remoteNodes = [], pasteNode, uploadFiles, canUndo = false, canRedo = fal
 const emit = defineEmits<{ history: []; undo: []; redo: []; duplicateSelection: [] }>();
 const menu = ref<DropdownInstance>();
 const menuList = ref<{ $el: HTMLElement }>();
-const menuLevel = ref<"actions" | "nodes" | "selection">("actions");
+const menuLevel = ref<"actions" | "nodes" | "selection" | "arrange">("actions");
 const selectedNodes = shallowRef<GraphNode[]>([]);
 const deleting = ref(false);
 const pasting = ref(false);
@@ -116,6 +131,13 @@ const selectionHandleRef = ref<InstanceType<typeof selectionHandle>>();
 const groupHandleRefs = ref<InstanceType<typeof selectionHandle>[]>([]);
 const groups = computed(() => flow.getNodes.value.filter(node => node.type === "canvasGroup" && !node.hidden));
 const singleGroupSelected = computed(() => flow.getSelectedNodes.value.length === 1 && flow.getSelectedNodes.value[0]?.type === "canvasGroup");
+const canArrangeSelection = computed(() => {
+  const nodes = getSelectionRoots(selectedNodes.value, flow.getNodes.value);
+  return !selectionBusy && !deleting.value && nodes.length > 1
+    && nodes.every(node => flow.findNode(node.id) === node && node.draggable !== false
+      && Number.isFinite(node.dimensions.width) && node.dimensions.width > 0
+      && Number.isFinite(node.dimensions.height) && node.dimensions.height > 0);
+});
 const nodeOrder: Record<string, number> = { "remote-textNode": 0, "remote-imageNode": 1, "remote-videoNode": 2, "remote-audioNode": 3 };
 const filteredNodes = computed(() => {
   const nodes = remoteNodes.map(node => ({
@@ -220,6 +242,13 @@ flow.onNodeContextMenu(() => {
 defineExpose({ openMenu, deleteSelection });
 
 async function handleCommand(command: unknown) {
+  if (command === "nodes" || command === "actions" || command === "selection" || command === "arrange") {
+    if (command === "arrange" && !canArrangeSelection.value) return;
+    menuLevel.value = command;
+    await nextTick();
+    menuList.value?.$el.focus();
+    return;
+  }
   if (command === "duplicateSelection") {
     if (selectionBusy || deleting.value || !selectedNodes.value.length) return;
     menu.value?.handleClose();
@@ -238,7 +267,7 @@ async function handleCommand(command: unknown) {
     else emit("redo");
     return;
   }
-  if (batchHistory && command !== "nodes" && command !== "actions") {
+  if (batchHistory) {
     try {
       await batchHistory(() => runCommand(command));
     } catch (error) {
@@ -250,6 +279,12 @@ async function handleCommand(command: unknown) {
 }
 
 async function runCommand(command: unknown) {
+  if (command === "horizontal" || command === "vertical" || command === "grid") {
+    if (!canArrangeSelection.value) return;
+    arrangeSelection(flow, selectedNodes.value, command);
+    menu.value?.handleClose();
+    return;
+  }
   if (command === "paste") {
     if (!pasteNode || pasting.value) return;
     pasting.value = true;
@@ -262,12 +297,6 @@ async function runCommand(command: unknown) {
   }
   if (command === "deleteSelection") {
     await deleteSelection();
-    return;
-  }
-  if (command === "nodes" || command === "actions") {
-    menuLevel.value = command;
-    await nextTick();
-    menuList.value?.$el.focus();
     return;
   }
   const node = filteredNodes.value.find((option) => option.type === command);

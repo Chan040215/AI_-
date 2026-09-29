@@ -32,12 +32,15 @@
             <el-input v-model="prompt" type="textarea" :rows="4" resize="none" :disabled="creating || opening" :placeholder="promptPlaceholder" aria-label="创作描述" />
             <template #footer>
               <div class="composerFooter">
-                <workspacePicker v-model="workspaceDirectory" :disabled="creating || opening" />
-                <el-space class="sendActions" :size="12">
+                <workspacePicker ref="promptWorkspacePicker" v-model="workspaceDirectory" :disabled="creating || opening" />
+                <el-space class="sendActions" wrap :size="12">
                   <modelPopover v-model="selectedModel" v-model:reasoningEffort="reasoningEffort" class="modelSelect" :disabled="creating || opening" />
-                  <el-button class="sendButton" type="primary" circle :icon="IconArrowUp" :loading="creating" :disabled="creating || opening || !workspaceDirectory" aria-label="发送" @click="createProject()" />
+                  <el-button class="sendButton" type="primary" :circle="!!workspaceDirectory" :icon="workspaceDirectory ? IconArrowUp : IconFolder" :loading="creating" :disabled="creating || opening" :aria-label="workspaceDirectory ? '发送' : '选择工作目录'" @click="workspaceDirectory ? createProject() : promptWorkspacePicker?.chooseDirectory()">
+                    <template v-if="!workspaceDirectory" #default>选择工作目录</template>
+                  </el-button>
                 </el-space>
               </div>
+              <p v-if="!workspaceDirectory" class="workspaceHint" role="status">请先选择一个空文件夹作为工作目录，画布和素材会保存在这里。</p>
             </template>
           </el-card>
         </div>
@@ -104,6 +107,7 @@ const settingsVisible = ref(false);
 const router = useRouter();
 const creating = ref(false);
 const opening = ref(false);
+const promptWorkspacePicker = ref<InstanceType<typeof workspacePicker>>();
 const relocationPicker = ref<InstanceType<typeof workspacePicker>>();
 const prompt = ref("");
 const workspaceStore = useWorkspaceStore();
@@ -371,16 +375,25 @@ async function createProject(fromPrompt = true) {
 
             .sendActions {
               margin-left: auto;
+              justify-content: flex-end;
 
               .modelSelect {
                 width: 190px;
               }
 
               .sendButton {
-                width: 36px;
                 height: 36px;
+
+                &.is-circle { width: 36px; }
               }
             }
+          }
+
+          .workspaceHint {
+            margin: 12px 0 0;
+            color: var(--el-text-color-regular);
+            font-size: 13px;
+            line-height: 1.6;
           }
         }
       }

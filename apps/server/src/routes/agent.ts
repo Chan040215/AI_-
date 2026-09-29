@@ -8,6 +8,7 @@ import u from "@/utils";
 const inputSchema = z.object({
   prompt: z.string().trim(), directory: z.string().min(1),
   attachments: u.agent.agentAttachmentsSchema.optional(),
+  mentions: u.agent.agentMentionsSchema.optional(),
   providerId: z.string().min(1), modelId: z.string().min(1),
   thinkingLevel: z.enum(["off", "low", "medium", "high"]).optional(),
   sessionFile: z.string().regex(/^[\w-]+\.jsonl$/).optional(),
@@ -30,6 +31,7 @@ export default Router().post("/", validateFields(inputSchema.shape), async (req,
   res.set({ "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-cache", "X-Accel-Buffering": "no" });
   res.flushHeaders();
   const send = (event: AgentEvent) => {
+    if (event.type === "session") options.sessionFile = event.file;
     u.agent.trackAgentEvent(cwd, options.sessionFile, event);
     if (!res.destroyed) res.write(`${JSON.stringify(event)}\n`);
   };
@@ -39,7 +41,7 @@ export default Router().post("/", validateFields(inputSchema.shape), async (req,
   const close = () => { bridge?.dispose(); questions.dispose(); controller.abort(); };
   res.once("close", close);
   try {
-    await u.agent.run({ ...options, cwd, canvas: bridge?.context, question: questions.context, signal: controller.signal }, send);
+    await u.agent.run({ ...options, cwd, canvas: bridge?.context, question: questions.context, signal: controller.signal, onCancel: close }, send);
     send({ type: "done" });
   } catch (error) {
     send({ type: "error", message: error instanceof Error ? error.message : "Agent 运行失败" });

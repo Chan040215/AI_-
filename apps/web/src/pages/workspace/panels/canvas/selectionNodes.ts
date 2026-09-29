@@ -36,6 +36,25 @@ export function getSelectionTree(selection: GraphNode[], nodes: GraphNode[]) {
   return result;
 }
 
+export function fitGroupBounds(nodes: GraphNode[], groups: Set<GraphNode>) {
+  for (const group of getSelectionTree([...groups], nodes).reverse()) {
+    if (!groups.has(group)) continue;
+    const children = nodes.filter(node => node.parentNode === group.id);
+    if (!children.length || children.some(node => !node.dimensions.width || !node.dimensions.height)) continue;
+    const left = Math.min(...children.map(node => node.position.x)) - 24;
+    const top = Math.min(...children.map(node => node.position.y)) - 40;
+    const width = Math.max(...children.map(node => node.position.x + node.dimensions.width)) - left + 24;
+    const height = Math.max(...children.map(node => node.position.y + node.dimensions.height)) - top + 24;
+    if (left || top) {
+      group.position = { x: group.position.x + left, y: group.position.y + top };
+      for (const child of children) child.position = { x: child.position.x - left, y: child.position.y - top };
+    }
+    const style = typeof group.style === "function" ? group.style(group) : group.style;
+    group.style = { ...style, width: `${width}px`, height: `${height}px` };
+    group.dimensions = { width, height };
+  }
+}
+
 export function finishGroupDrag(nodes: GraphNode[], draggedNodes: GraphNode[]) {
   const byId = new Map(nodes.map(node => [node.id, node]));
   const affected = new Set<GraphNode>();
@@ -89,21 +108,6 @@ export function finishGroupDrag(nodes: GraphNode[], draggedNodes: GraphNode[]) {
     ancestors(node).filter(ancestor => ancestor.type === "canvasGroup").forEach(ancestor => affected.add(ancestor));
   }
 
-  for (const group of getSelectionTree([...affected], nodes).reverse()) {
-    if (!affected.has(group)) continue;
-    const children = nodes.filter(node => node.parentNode === group.id);
-    if (!children.length || children.some(node => !node.dimensions.width || !node.dimensions.height)) continue;
-    const left = Math.min(...children.map(node => node.position.x)) - 24;
-    const top = Math.min(...children.map(node => node.position.y)) - 40;
-    const width = Math.max(...children.map(node => node.position.x + node.dimensions.width)) - left + 24;
-    const height = Math.max(...children.map(node => node.position.y + node.dimensions.height)) - top + 24;
-    if (left || top) {
-      group.position = { x: group.position.x + left, y: group.position.y + top };
-      for (const child of children) child.position = { x: child.position.x - left, y: child.position.y - top };
-    }
-    const style = typeof group.style === "function" ? group.style(group) : group.style;
-    group.style = { ...style, width: `${width}px`, height: `${height}px` };
-    group.dimensions = { width, height };
-  }
+  fitGroupBounds(nodes, affected);
   if (reparented) nodes.splice(0, nodes.length, ...getSelectionTree(nodes, nodes));
 }

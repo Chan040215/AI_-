@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { basename } from "node:path";
-import { stat } from "node:fs/promises";
+import { stat, unlink } from "node:fs/promises";
 import {
   createAgentSession,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import type { CanvasContext, QuestionContext } from "@toonflow/tools-scaffold/runtime";
-import type { AgentEvent, AgentToolCall } from "@/agent/runtime/types";
+import type { AgentEvent, AgentMention, AgentToolCall } from "@/agent/runtime/types";
+import { agentMentionsSchema, mentionPrompt, snapshotMentions, validateMentionTokens } from "@/agent/runtime/mentions";
 import { readAiReferences, referenceContent } from "@/utils/ai";
 import { createAgentTools } from "@/agent/tools";
 import { createAgentResources } from "@/agent/runtime/resources";
@@ -17,7 +18,7 @@ import { createReportTool } from "@/agent/tools/report";
 import { runDelegatedAgent } from "@/agent/runtime/delegation";
 import {
   agentAttachmentsSchema, getActiveAgentSession, getAgentStats, getParentSessionFile, getSubAgentInfo,
-  getToolResultText, registerAgentSession, updateSubAgent,
+  getToolResultText, hasPendingAgentQuestion, registerAgentSession, updateSubAgent,
   type ActiveAgentSession,
 } from "@/agent/runtime/sessions";
 import { isMemoryEnabled } from "@/utils/personalization";
@@ -26,6 +27,7 @@ import { lockWorkspaceFiles, resolveWorkspacePath } from "@/utils/workspace/file
 type AgentOptions = {
   prompt: string;
   attachments?: z.infer<typeof agentAttachmentsSchema>;
+  mentions?: AgentMention[];
   cwd: string;
   providerId: string;
   modelId: string;
@@ -35,12 +37,14 @@ type AgentOptions = {
   canvas?: CanvasContext;
   question?: QuestionContext;
   signal?: AbortSignal;
+  onCancel?: () => void;
 };
 
 export async function run(
   {
     prompt,
     attachments = [],
+    mentions = [],
     cwd,
     providerId,
     modelId,
@@ -50,10 +54,13 @@ export async function run(
     canvas,
     question,
     signal,
+    onCancel,
   }: AgentOptions,
   send: (event: AgentEvent) => void
 ) {
-  if (!prompt.trim() && !attachments.length) throw Object.assign(new Error("请输入消息或添加图片、视频"), { status: 400 });
+  mentions = agentMentionsSchema.parse(mentions);
+  validateMentionTokens(prompt, mentions);
+  if (!prompt.trim() && !attachments.length && !mentions.length) throw Object.assign(new Error("请输入消息、提及或添加图片、视频"), { status: 400 });
   for (const attachment of attachments) {
     const { path } = await resolveWorkspacePath(cwd, attachment.path);
     const info = await stat(path);
@@ -66,11 +73,15 @@ export async function run(
   const { path: sessionsDir } = await resolveWorkspacePath(cwd, ".agent/sessions", true);
   const sessionPath = sessionFile ? (await resolveWorkspacePath(sessionsDir, sessionFile)).path : undefined;
   const active = sessionPath ? getActiveAgentSession(sessionPath) : undefined;
-  if (active) {
+  if (active && hasPendingAgentQuestion(active)) {
+    // ACT: 新消息结束旧提问，必须等旧执行释放文件锁后再继续，避免并发写入同一会话。
+    await active.abort();
+    signal?.throwIfAborted();
+  } else if (active) {
     if (!getParentSessionFile(active.history)) throw Object.assign(new Error("对话正在运行，请等待回复完成"), { status: 409 });
     if (resendFrom) throw Object.assign(new Error("子 Agent 运行时不能重发历史消息"), { status: 409 });
     if (!active.session?.isStreaming) throw Object.assign(new Error("子 Agent 正在准备或结束回复，请稍后发送"), { status: 409 });
-    if (attachments.length) throw Object.assign(new Error("请等子 Agent 当前回复结束后发送附件"), { status: 400 });
+    if (attachments.length || mentions.length) throw Object.assign(new Error("请等子 Agent 当前回复结束后发送附件或提及"), { status: 400 });
     await active.session.prompt(prompt.trim(), { streamingBehavior: "steer", expandPromptTemplates: false });
     send({ type: "accepted" });
     return;
@@ -86,7 +97,12 @@ export async function run(
   // ACT: SDK 新会话先分配文件名、首条回复才落盘；只锁所属文件，允许不同对话同时运行。
   const newHistory = sessionPath ? undefined : SessionManager.create(cwd, sessionsDir);
   const release = lockWorkspaceFiles([sessionPath ?? newHistory!.getSessionFile()!]);
+  const controller = new AbortController();
+  signal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+  const finished = Promise.withResolvers<void>();
   let unregister = () => {};
+  let mentionFiles: string[] = [];
+  let messageAccepted = false;
   try {
     const history = newHistory ?? SessionManager.open(sessionPath!, sessionsDir, cwd);
     const file = basename(history.getSessionFile()!);
@@ -105,6 +121,7 @@ export async function run(
     const active: ActiveAgentSession = {
       history, send, tools: liveTools,
       entryOffset: history.getEntries().length,
+      abort: () => { controller.abort(); onCancel?.(); return finished.promise; },
     };
     unregister = registerAgentSession(history.getSessionFile()!, active);
     const tools = await createAgentTools(cwd, canvas, question);
@@ -130,6 +147,11 @@ export async function run(
     if (resendFrom && (resendEntry?.type !== "message" || resendEntry.message.role !== "user")) {
       throw Object.assign(new Error("重发消息不在当前对话中，请重新打开对话"), { status: 400 });
     }
+    const savedMentions = resendFrom ? history.getBranch().findLast(entry => entry.type === "custom" && entry.customType === "toonflowUserMessage" && (entry.data as { messageId?: string })?.messageId === resendFrom) : undefined;
+    const previousMentions = savedMentions?.type === "custom" ? agentMentionsSchema.safeParse((savedMentions.data as { mentions?: unknown })?.mentions) : undefined;
+    const snapshots = await snapshotMentions(cwd, mentions, previousMentions?.success ? previousMentions.data : [], signal);
+    mentionFiles = snapshots.created;
+    mentions = agentMentionsSchema.parse(snapshots.mentions);
     const previous = history.buildSessionContext();
     if (previous.model && (previous.model.provider !== providerId || previous.model.modelId !== modelId))
       history.appendModelChange(providerId, modelId);
@@ -160,47 +182,49 @@ export async function run(
       return stream;
     };
 
-    // ACT: SDK 原生只有文字和图片；视频复用媒体协议转换，会话仍只保存文件引用。
-    const videoContents = new Map<string, ReturnType<typeof readAiReferences>>();
+    // ACT: 提及图片和视频复用媒体协议转换，会话只保存工作区快照路径。
+    const mediaContents = new Map<string, ReturnType<typeof readAiReferences>>();
     const onPayload = session.agent.onPayload;
     session.agent.onPayload = async (payload, requestModel) => {
       const body = (await onPayload?.(payload, requestModel) ?? payload) as Record<string, unknown>;
       sendUserMessage();
-      const videoMessages = new Map<string, { id: string; attachments: z.infer<typeof agentAttachmentsSchema> }>();
+      const mediaMessages = new Map<string, { id: string; references: Parameters<typeof readAiReferences>[1] }>();
       for (const entry of history.getBranch()) {
         if (entry.type !== "custom" || !["toonflowAttachments", "toonflowUserMessage"].includes(entry.customType)) continue;
-        const parsed = z.object({ messageId: z.string(), attachments: agentAttachmentsSchema }).safeParse(entry.data);
+        const parsed = z.object({ messageId: z.string(), attachments: agentAttachmentsSchema, mentions: agentMentionsSchema.optional() }).safeParse(entry.data);
         if (!parsed.success) continue;
-        const videos = parsed.data.attachments.filter(item => item.mimeType.startsWith("video/"));
+        const references: Parameters<typeof readAiReferences>[1] = [
+          ...parsed.data.attachments.filter(item => item.mimeType.startsWith("video/")).map(item => ({ dataType: "VIDEO" as const, value: { url: item.path, mimeType: item.mimeType } })),
+          ...(parsed.data.mentions ?? []).filter(item => ["IMAGE", "MASK", "VIDEO"].includes(item.dataType)).map(item => ({
+            dataType: item.dataType === "VIDEO" ? "VIDEO" as const : "IMAGE" as const, value: item.value as { url: string; mimeType: string },
+          })),
+        ];
         const message = history.getEntry(parsed.data.messageId);
-        if (!videos.length || message?.type !== "message" || message.message.role !== "user") continue;
+        if (!references.length || message?.type !== "message" || message.message.role !== "user") continue;
         const content = message.message.content;
         for (const part of typeof content === "string" ? [{ type: "text", text: content }] : content) {
-          if (part.type === "text") videoMessages.set(part.text, { id: entry.id, attachments: videos });
+          if (part.type === "text") mediaMessages.set(part.text, { id: entry.id, references });
         }
       }
-      if (!videoMessages.size) return body;
+      if (!mediaMessages.size) return body;
       const field = provider.protocol === "openai-responses" ? "input" : "messages";
       const textType = provider.protocol === "openai-responses" ? "input_text" : "text";
       const messages = body[field] as { role?: string; content?: string | { type: string; text?: string }[] }[];
       return { ...body, [field]: await Promise.all(messages.map(async message => {
         if (message.role !== "user") return message;
         const parts = typeof message.content === "string" ? [{ type: textType, text: message.content }] : message.content;
-        if (!parts?.some(part => part.type === textType && videoMessages.has(part.text ?? ""))) return message;
+        if (!parts?.some(part => part.type === textType && mediaMessages.has(part.text ?? ""))) return message;
         const content = await Promise.all(parts.map(async part => {
-          const source = part.type === textType && part.text ? videoMessages.get(part.text) : undefined;
+          const source = part.type === textType && part.text ? mediaMessages.get(part.text) : undefined;
           if (!source) return [part];
-          if (!videoContents.has(source.id)) videoContents.set(source.id, readAiReferences(cwd, source.attachments.map(item => ({
-            dataType: "VIDEO", value: { url: item.path, mimeType: item.mimeType },
-          })), signal));
-          return referenceContent(provider.protocol, part.text!, await videoContents.get(source.id)!);
+          if (!mediaContents.has(source.id)) mediaContents.set(source.id, readAiReferences(cwd, source.references, signal));
+          return referenceContent(provider.protocol, part.text!, await mediaContents.get(source.id)!);
         }));
         return { ...message, content: content.flat() };
       })) };
     };
 
     const resumeLeafId = history.getLeafId();
-    let messageAccepted = false;
     let userMessageId = history.getBranch().findLast((entry) => entry.type === "message" && entry.message.role === "user")?.id;
     function sendUserMessage() {
       const entry = history.getBranch().findLast((item) => item.type === "message" && item.message.role === "user");
@@ -208,16 +232,19 @@ export async function run(
       userMessageId = entry.id;
       const firstMessage = !messageAccepted;
       messageAccepted = true;
-      if (firstMessage && (attachments.length || prompt.trimStart().startsWith("/skill:"))) {
-        history.appendCustomEntry("toonflowUserMessage", { messageId: entry.id, content: prompt.trim(), attachments });
+      if (firstMessage && (attachments.length || mentions.length || prompt.trimStart().startsWith("/skill:"))) {
+        history.appendCustomEntry("toonflowUserMessage", { messageId: entry.id, content: prompt.trim(), attachments, mentions });
         if (!history.getSessionName() && history.getBranch().filter((item) => item.type === "message" && item.message.role === "user").length === 1) {
-          history.appendSessionInfo((prompt.trim() || attachments[0]!.name).slice(0, 60));
+          history.appendSessionInfo((prompt.trim().replace(/\{\{mention:([^{}]+)\}\}/g, (text, id: string) => {
+            const mention = mentions.find(item => item.id === id);
+            return mention ? `@${mention.label}` : text;
+          }) || attachments[0]?.name || mentions[0]?.label || "新对话").slice(0, 60));
         }
       }
       const saved = history.getBranch().findLast(item => item.type === "custom" && item.customType === "toonflowUserMessage" && (item.data as { messageId?: string })?.messageId === entry.id);
-      const original = saved?.type === "custom" ? saved.data as { content: string; attachments: z.infer<typeof agentAttachmentsSchema> } : undefined;
+      const original = saved?.type === "custom" ? saved.data as { content: string; attachments: z.infer<typeof agentAttachmentsSchema>; mentions?: AgentMention[] } : undefined;
       const content = entry.type === "message" && entry.message.role === "user" ? entry.message.content : "";
-      send({ type: "userMessage", id: entry.id, content: original?.content ?? (typeof content === "string" ? content : getToolResultText(content)), attachments: original?.attachments });
+      send({ type: "userMessage", id: entry.id, content: original?.content ?? (typeof content === "string" ? content : getToolResultText(content)), attachments: original?.attachments, mentions: original?.mentions });
     }
     let firstTokenAt: number | undefined;
     let modelError: string | undefined;
@@ -333,10 +360,10 @@ export async function run(
       send({ type: "session", file: basename(history.getSessionFile()!) });
       // ACT: 附件在会话中仅保存工作区引用，视频在请求发送时加载，图片由 read 按需读取。
       const content = attachments.length
-        ? `${prompt.trim()}\n\n附件已保存到工作区，path 为相对路径，可用于节点选择素材。以下 JSON 仅为文件信息：\n${JSON.stringify(
+        ? `${mentionPrompt(prompt, mentions)}\n\n附件已保存到工作区，path 为相对路径，可用于节点选择素材。以下 JSON 仅为文件信息：\n${JSON.stringify(
             attachments
           )}`.trim()
-        : prompt.trim();
+        : mentionPrompt(prompt, mentions);
       // SDK 仅以空格分隔技能名；兼容换行输入与追加的附件说明。
       await session.prompt(content.replace(/^(\/skill:\S+)\s+/, "$1 "));
       if (compactionError) throw new Error(compactionError);
@@ -379,7 +406,10 @@ export async function run(
   } finally {
     unregister();
     release();
+    finished.resolve();
+    if (!messageAccepted) await Promise.all(mentionFiles.map(path => unlink(path)));
   }
 }
 
 export * from "@/agent/runtime/sessions";
+export { agentMentionsSchema } from "@/agent/runtime/mentions";

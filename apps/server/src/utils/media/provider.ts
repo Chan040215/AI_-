@@ -29,6 +29,60 @@ function invalid(message: string, status = 400): never {
   throw Object.assign(new Error(message), { status });
 }
 
+function mediaErrorMessage(value: unknown, config: Record<string, unknown>, depth = 0): string {
+  if (depth > 6 || value == null) return "";
+  let message = "";
+  if (typeof value === "string") {
+    message = value.trim();
+    if (/^[\[{]/.test(message)) {
+      try { message = mediaErrorMessage(JSON.parse(message), config, depth + 1); }
+      catch { /* ACT: 非 JSON 错误正文按纯文本显示。 */ }
+    }
+  } else if (Array.isArray(value)) {
+    message = value.slice(0, 10).map(item => mediaErrorMessage(item, config, depth + 1)).filter(Boolean).join("；");
+  } else if (typeof value === "object") {
+    const data = value as Record<string, unknown>;
+    const messages: string[] = [];
+    for (const key of ["failReason", "fail_reason", "error", "errors", "detail", "details", "error_description", "data", "task", "message", "msg", "status_msg"]) {
+      if ((key === "data" || key === "task") && typeof data[key] !== "object") continue;
+      const detail = mediaErrorMessage(data[key], config, depth + 1);
+      if (detail) messages.push(...detail.split("\n"));
+    }
+    message = [...new Set(messages)].join("\n");
+    if (!message && typeof data.data === "string") message = mediaErrorMessage(data.data, config, depth + 1);
+  }
+  if (!message || /^\s*<(?:!doctype|html|head|body)\b/i.test(message)) return "";
+  for (const [key, secret] of Object.entries(config)) {
+    if (!/api.?key|secret|token|password|authorization|cookie/i.test(key) || typeof secret !== "string" || !secret.trim()) continue;
+    const token = secret.trim().replace(/^Bearer\s*/i, "");
+    if (token) message = message.replaceAll(token, "••••••");
+  }
+  return message.replace(/(Bearer\s+)[^\s"'<>]+/gi, "$1••••••")
+    .replace(/([?&][^=&#\s]+)=[^&#\s"'<>]*/g, "$1=••••••")
+    .replace(/((?:api[_-]?key|secret|token|password|authorization|cookie)["']?\s*[:=]\s*["']?)[^\s"',;}&<>]+/gi, "$1••••••")
+    .slice(0, 4000);
+}
+
+async function responseErrorMessage(response: Response, config: Record<string, unknown>) {
+  if (!response.body || !/json|text|^$/i.test(response.headers.get("content-type") ?? "")) return "";
+  const reader = response.clone().body!.getReader();
+  const timer = setTimeout(() => { void reader.cancel().catch(() => {}); }, 3000);
+  const decoder = new TextDecoder();
+  let text = "";
+  let size = 0;
+  try {
+    // ACT: 错误正文最多读取 16 KB / 3 秒；大响应须由供应商在标准错误字段中提供摘要。
+    while (size < 16000) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value.subarray(0, 16000 - size), { stream: true });
+      size += value.byteLength;
+    }
+    return mediaErrorMessage(text + decoder.decode(), config);
+  } catch { return ""; }
+  finally { clearTimeout(timer); void reader.cancel().catch(() => {}); }
+}
+
 function unwrap(expression: Expression): Expression {
   while (expression.type === "TSAsExpression" || expression.type === "TSSatisfiesExpression" || expression.type === "ParenthesizedExpression" || expression.type === "TSTypeAssertion") {
     expression = expression.expression;
@@ -74,7 +128,18 @@ function parseProvider(source: string) {
   try { module = parse(source, { sourceType: "module", plugins: ["typescript"] }); }
   catch (err) { return invalid(`供应商 TypeScript 语法错误：${err instanceof Error ? err.message : String(err)}`); }
   const exported = module.program.body.find(item => item.type === "ExportDefaultDeclaration");
-  if (!exported || exported.type !== "ExportDefaultDeclaration") invalid("供应商须通过 export default 导出对象");
+  if (!exported || exported.type !== "ExportDefaultDeclaration") {
+    const legacy = module.program.body.some(item => {
+      if (item.type !== "ExpressionStatement" || item.expression.type !== "AssignmentExpression") return false;
+      const target = item.expression.left;
+      if (target.type !== "MemberExpression" || target.object.type !== "Identifier" || target.object.name !== "exports") return false;
+      const name = !target.computed && target.property.type === "Identifier" ? target.property.name
+        : target.computed && target.property.type === "StringLiteral" ? target.property.value : "";
+      return ["vendor", "textRequest", "imageRequest", "videoRequest", "ttsRequest"].includes(name);
+    });
+    if (legacy) invalid("检测到旧版 Toonflow 供应商 TS，无法在 Toonflow 2.0 中使用。请在「添加自定义媒体供应商」中点击「一键复制提示词」，结合旧代码和接口资料重新生成新版代码后再导入。");
+    invalid("供应商须通过 export default 导出对象");
+  }
   const object = unwrap(exported.declaration as Expression);
   if (object.type !== "ObjectExpression") invalid("供应商须直接导出对象字面量");
   const entries = properties(object);
@@ -274,9 +339,10 @@ export async function loadMediaProviderSource(source: string, config: Record<str
   signal?.throwIfAborted();
   const definition = (module.namespace as { default: Provider }).default;
   const rules = Array.isArray(definition.rules) ? definition.rules : [];
-  return {
+  const providerConfig = { ...Object.fromEntries(rules.map(rule => [rule.field, rule.value])), ...structuredClone(config) };
+  const provider = {
     ...definition,
-    config: { ...Object.fromEntries(rules.map(rule => [rule.field, rule.value])), ...structuredClone(config) },
+    config: providerConfig,
     signal,
     tool: {
       fetch: signal ? Object.assign((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
@@ -285,6 +351,7 @@ export async function loadMediaProviderSource(source: string, config: Record<str
         return fetchRequest(input, { ...init, signal: requestSignal ? AbortSignal.any([signal, requestSignal]) : signal });
       }, { preconnect: fetchRequest.preconnect }) as typeof fetch : fetchRequest,
       hash: Bun.hash,
+      errorMessage: (value: unknown) => mediaErrorMessage(value, providerConfig),
       image: Bun.Image,
       audio: { convert: (input: Uint8Array, options: AudioConvertOptions) => convertAudio(input, options, signal) },
       ffmpeg: async () => {
@@ -293,4 +360,58 @@ export async function loadMediaProviderSource(source: string, config: Record<str
       },
     } satisfies ProviderTools,
   };
+  for (const name of ["generateImage", "generateVideo", "generateAudio"] as const) {
+    const generate = definition[name];
+    if (!generate) continue;
+    Object.assign(provider, { [name]: async (request: ImageRequest & VideoRequest & AudioRequest) => {
+      let failure: { status?: number; message: string } | undefined;
+      let pendingRequests = 0;
+      let overlappingRequests = false;
+      let requestCount = 0;
+      const tool = { ...provider.tool, fetch: Object.assign(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        if (++pendingRequests > 1) overlappingRequests = true;
+        const requestId = ++requestCount;
+        failure = undefined;
+        try {
+          const response = await provider.tool.fetch(input, init);
+          if (!response.ok) failure = { status: response.status, message: await responseErrorMessage(response, provider.config) };
+          else {
+            const readJson = response.json;
+            Object.assign(response, { json: async function(this: Response) {
+              const result = await readJson.call(this);
+              if (this === response && requestId === requestCount && !overlappingRequests && result && typeof result === "object") {
+                const data = result as Record<string, unknown>;
+                const failed = [data, data.data, data.task].some(item => {
+                  if (!item || typeof item !== "object") return false;
+                  const state = item as Record<string, unknown>;
+                  return ["failed", "failure", "error", "rejected"].includes(String(state.status ?? state.state ?? "").toLowerCase())
+                    || state.success === false || (typeof state.code === "number" && state.code >= 400 && state.code < 600);
+                });
+                if (failed) failure = { message: mediaErrorMessage(result, provider.config) };
+              }
+              return result;
+            } });
+          }
+          return response;
+        } finally { pendingRequests--; }
+      }, { preconnect: provider.tool.fetch.preconnect }) as typeof fetch };
+      try { return await generate.call({ ...provider, tool }, request); }
+      catch (error) {
+        const info = error as { name?: unknown; message?: unknown } | null;
+        if (signal?.aborted || info?.name === "AbortError") throw error;
+        let message = mediaErrorMessage(error, provider.config);
+        if (!message) throw error;
+        // ACT: 只补充串行请求中匹配的错误；并发时无法精确关联响应，由适配器使用 errorMessage 提取。
+        const matchesFailure = failure?.status !== undefined
+          ? new RegExp(`\\b(?:HTTP|status(?: code)?)\\s*[:：]?\\s*${failure.status}[)）.。\\s]*$`, "i").test(message)
+          : failure?.message.includes(message) || /(?:未返回任务\s*ID|^(?:图片|视频)?生成失败|^素材审核失败)$/.test(message);
+        if (!overlappingRequests && failure?.message && matchesFailure) {
+          message = [...new Set([...message.split("\n"), ...failure.message.split("\n")])].join("\n").slice(0, 4000);
+        }
+        if (message === (typeof error === "string" ? error : info?.message)) throw error;
+        throw Object.assign(new Error(message), typeof error === "object" ? error : undefined, { message, cause: error });
+      }
+    } });
+  }
+  return provider;
 }
