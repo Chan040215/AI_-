@@ -56,7 +56,7 @@ const reasoningOptions = [
   { label: "中", value: "medium" },
   { label: "高", value: "high" },
 ];
-const modelGroups = computed(() => customProviders.value.toSorted((left, right) => Number(right.id === "tfRouter") - Number(left.id === "tfRouter")));
+const modelGroups = computed(() => customProviders.value.toSorted((left, right) => Number(right.id === "agnesAi") - Number(left.id === "agnesAi")));
 const selectedModelChoice = computed(() => modelChoices.value.find(item => item.value === selectedModel.value));
 const reasoningLabel = computed(() => reasoningOptions.find(item => item.value === reasoningEffort.value)?.label ?? "默认");
 watch(selectedModel, () => { reasoningEffort.value = ""; });

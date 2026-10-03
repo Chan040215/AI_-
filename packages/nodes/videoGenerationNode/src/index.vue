@@ -14,9 +14,36 @@
       <el-button :icon="IconTransfer" :loading="uploading" :disabled="generating || deleting" text title="替换视频" aria-label="替换视频" @click.stop="fileInput?.click()" />
       <input ref="fileInput" type="file" accept="video/*" hidden aria-label="选择替换视频" :disabled="generating || deleting || uploading" @change="replaceOutput" />
     </template>
-    <div v-loading="generating || uploading" class="videoContent nopan" :aria-busy="generating || uploading">
+    <div class="videoContent nopan" :aria-busy="generating || uploading">
+      <!-- 视频生成中覆盖层：展示等待耗时、40秒冷却倒计时及阶段进度 -->
+      <div v-if="generating" class="generationStatusOverlay">
+        <div class="statusRadar">
+          <div class="radarPing" />
+          <icon-camera-ai :size="32" class="radarIcon" />
+        </div>
+        <div class="statusMessageText">{{ statusInfo.message || "正在提交生成任务..." }}</div>
+        <div class="statusBadges">
+          <span class="badgeTime">⏱️ 等待 {{ formatElapsed(elapsedSeconds) }}</span>
+          <span v-if="statusInfo.cooldownRemaining > 0" class="badgeCooldown">
+            ⏳ 限频冷却中: 剩余 {{ statusInfo.cooldownRemaining }}s
+          </span>
+        </div>
+        <div class="statusProgressTrack">
+          <div
+            class="statusProgressBar"
+            :style="{ width: `${Math.max(10, Math.min(100, statusInfo.progress || 15))}%` }" />
+        </div>
+        <el-button class="cancelButton" size="small" text type="danger" @click.stop="generationController?.abort()">
+          停止生成
+        </el-button>
+      </div>
+
+      <div v-else-if="uploading" v-loading="true" class="videoEmpty">
+        <icon-camera-ai :size="48" stroke="1.25" />
+      </div>
+
       <videoPlayer
-        v-if="previewUrl"
+        v-else-if="previewUrl"
         ref="player"
         :src="previewUrl"
         label="生成视频"
@@ -123,6 +150,66 @@ const videoWidth = ref(0);
 let generationController: AbortController | undefined;
 const generationState = useNodeGeneration(outputs, () => generationController?.abort());
 const { generating } = generationState;
+const elapsedSeconds = ref(0);
+const statusInfo = ref({
+  state: "idle",
+  message: "",
+  progress: 0,
+  cooldownRemaining: 0,
+});
+let timerInterval: ReturnType<typeof setInterval> | undefined;
+let statusPollInterval: ReturnType<typeof setInterval> | undefined;
+
+function formatElapsed(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+}
+
+async function pollGenerationStatus() {
+  try {
+    const res = await fetch(`/api/ai/media/status?outputDirectory=assets/${id}`);
+    if (res.ok) {
+      const json = await res.json();
+      if (json.data) {
+        statusInfo.value = {
+          state: json.data.state || "processing",
+          message: json.data.message || "",
+          progress: json.data.progress || 0,
+          cooldownRemaining: json.data.cooldownRemaining || 0,
+        };
+      }
+    }
+  } catch {}
+}
+
+watch(generating, (isGenerating) => {
+  if (isGenerating) {
+    elapsedSeconds.value = 0;
+    statusInfo.value = {
+      state: "submitting",
+      message: "正在提交任务到机房...",
+      progress: 10,
+      cooldownRemaining: 0,
+    };
+    timerInterval = setInterval(() => {
+      elapsedSeconds.value++;
+    }, 1000);
+    pollGenerationStatus();
+    statusPollInterval = setInterval(pollGenerationStatus, 1500);
+  } else {
+    if (timerInterval) clearInterval(timerInterval);
+    if (statusPollInterval) clearInterval(statusPollInterval);
+    timerInterval = undefined;
+    statusPollInterval = undefined;
+    statusInfo.value = { state: "idle", message: "", progress: 0, cooldownRemaining: 0 };
+  }
+});
+
+onScopeDispose(() => {
+  if (timerInterval) clearInterval(timerInterval);
+  if (statusPollInterval) clearInterval(statusPollInterval);
+});
 let generation: Promise<void> | undefined;
 let modelsRequest: Promise<void> | undefined;
 // ACT: 供应商未声明视频比例范围，沿用界面的通用比例，具体支持范围由供应商校验。
@@ -420,10 +507,127 @@ nodeTools.register({
     color: var(--el-text-color-placeholder);
   }
 
+  .generationStatusOverlay {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 16px;
+    background: rgba(18, 18, 24, 0.88);
+    backdrop-filter: blur(8px);
+    border-radius: var(--el-border-radius-base);
+    color: #fff;
+    text-align: center;
+    user-select: none;
+
+    .statusRadar {
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      margin-bottom: 2px;
+
+      .radarPing {
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        background: var(--el-color-primary);
+        opacity: 0.35;
+        animation: radarPulse 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+      }
+
+      .radarIcon {
+        position: relative;
+        z-index: 2;
+        color: var(--el-color-primary-light-3);
+      }
+    }
+
+    .statusMessageText {
+      max-width: 90%;
+      font-size: 13px;
+      font-weight: 500;
+      color: #f1f5f9;
+      line-height: 1.4;
+    }
+
+    .statusBadges {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      margin: 2px 0;
+
+      .badgeTime, .badgeCooldown {
+        padding: 2px 8px;
+        font-size: 11px;
+        font-weight: 600;
+        border-radius: 12px;
+        line-height: 1.4;
+      }
+
+      .badgeTime {
+        background: rgba(255, 255, 255, 0.12);
+        color: #94a3b8;
+      }
+
+      .badgeCooldown {
+        background: rgba(234, 179, 8, 0.2);
+        border: 1px solid rgba(234, 179, 8, 0.5);
+        color: #fef08a;
+        animation: badgeBlink 1.5s ease-in-out infinite;
+      }
+    }
+
+    .statusProgressTrack {
+      width: 75%;
+      max-width: 220px;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 2px;
+      overflow: hidden;
+      margin: 4px 0;
+
+      .statusProgressBar {
+        height: 100%;
+        background: linear-gradient(90deg, var(--el-color-primary), #38bdf8);
+        border-radius: 2px;
+        transition: width 0.4s ease;
+      }
+    }
+
+    .cancelButton {
+      margin-top: 2px;
+      font-size: 11px;
+      padding: 2px 6px;
+      height: auto;
+      opacity: 0.8;
+
+      &:hover {
+        opacity: 1;
+      }
+    }
+  }
+
   :deep(.el-loading-mask) {
     pointer-events: none;
   }
+}
 
+@keyframes radarPulse {
+  0% { transform: scale(0.8); opacity: 0.8; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+@keyframes badgeBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
 }
 
 .promptCard {

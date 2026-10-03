@@ -29,7 +29,15 @@ function imageOptions(value: unknown, pattern: RegExp) {
 
 export async function listMediaModels(): Promise<MediaModel[]> {
   const installedProviders = await listMediaProviders();
-  return installedProviders.flatMap(provider => provider.models.flatMap(model => {
+  const configurations = record(conf.get("settings", {}).mediaProviderConfigs);
+  const activeProviders = installedProviders.filter(provider => {
+    if (provider.id === "agnesAi") return true;
+    const config = record(configurations[provider.id]);
+    const apiKey = typeof config.apiKey === "string" ? config.apiKey.trim() : "";
+    return !!apiKey;
+  });
+  const providersToUse = activeProviders.length > 0 ? activeProviders : installedProviders.filter(p => p.id === "agnesAi");
+  return providersToUse.flatMap(provider => provider.models.flatMap(model => {
     if (model.type !== "image" && model.type !== "video" && model.type !== "audio") return [];
     const builtIn = (mediaProviders as readonly Provider[]).find(item => item.id === provider.id)?.models.find(item => item.id === model.id);
     return [{
@@ -126,6 +134,18 @@ async function assetBytes(asset: MediaAsset, mediaType: "image" | "video" | "aud
   return { bytes, mimeType };
 }
 
+export const activeMediaGenerations = new Map<string, {
+  directory: string;
+  outputDirectory: string;
+  mediaType: string;
+  state: string;
+  message: string;
+  progress: number;
+  cooldownRemaining: number;
+  startTime: number;
+  updatedAt: number;
+}>();
+
 export async function generateMedia(
   cwd: string,
   mediaType: "image" | "video" | "audio",
@@ -137,15 +157,43 @@ export async function generateMedia(
   const directory = await realpath(cwd);
   const outputDirectory = request.outputDirectory ?? "assets/generated";
   await resolveWorkspacePath(directory, outputDirectory, true);
+  const trackingKey = outputDirectory.replace(/^[/\\]+|[/\\]+$/g, "");
+  activeMediaGenerations.set(trackingKey, {
+    directory,
+    outputDirectory,
+    mediaType,
+    state: "submitting",
+    message: "正在准备生成任务...",
+    progress: 5,
+    cooldownRemaining: 0,
+    startTime: Date.now(),
+    updatedAt: Date.now(),
+  });
+
+  const onProgress = (update: { state: string; message: string; progress?: number; cooldownRemaining?: number }) => {
+    const prev = activeMediaGenerations.get(trackingKey);
+    activeMediaGenerations.set(trackingKey, {
+      directory,
+      outputDirectory,
+      mediaType,
+      state: update.state ?? prev?.state ?? "processing",
+      message: update.message ?? prev?.message ?? "",
+      progress: update.progress ?? prev?.progress ?? 0,
+      cooldownRemaining: update.cooldownRemaining ?? 0,
+      startTime: prev?.startTime ?? Date.now(),
+      updatedAt: Date.now(),
+    });
+  };
+
   const providerInfo = await getMediaProvider(request.providerId);
   const model = providerInfo.models.find(model => model.id === request.modelId && model.type === mediaType);
   if (!model) invalid("所选媒体模型不存在或类型不匹配，请重新选择");
   const configurations = record(conf.get("settings", {}).mediaProviderConfigs);
-  const provider = await loadMediaProviderSource(providerInfo.source, record(configurations[providerInfo.id]), signal, undefined, directory);
+  const provider = await loadMediaProviderSource(providerInfo.source, record(configurations[providerInfo.id]), signal, undefined, directory, onProgress);
   const generate = mediaType === "image" ? provider.generateImage : mediaType === "video" ? provider.generateVideo : provider.generateAudio;
   if (typeof generate !== "function") invalid(`此供应商不支持${{ image: "图片", video: "视频", audio: "音频" }[mediaType]}生成`);
   const rules = Array.isArray(provider.rules) ? provider.rules : [];
-  if (rules.some(rule => rule.field === "apiKey") && (typeof provider.config.apiKey !== "string" || !provider.config.apiKey.trim())) invalid("请先在媒体模型设置中配置供应商 API Key");
+  if (providerInfo.id !== "agnesAi" && rules.some(rule => rule.field === "apiKey") && (typeof provider.config.apiKey !== "string" || !provider.config.apiKey.trim())) invalid("请先在媒体模型设置中配置供应商 API Key");
   const references = async (items: MediaReference[] | undefined, type: string) => items ? Promise.all(items.map(item => readReference(directory, item, type, signal))) : undefined;
   const images = await references(request.images, "image");
   signal?.throwIfAborted();
@@ -190,5 +238,7 @@ export async function generateMedia(
     // ACT: 只回滚本次创建的文件，保留目录中已有的节点资源。
     await Promise.all(written.map(path => unlink(path).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; })));
     throw err;
+  } finally {
+    setTimeout(() => activeMediaGenerations.delete(trackingKey), 15000);
   }
 }

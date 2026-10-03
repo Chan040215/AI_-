@@ -58,7 +58,7 @@ export type NodeAiTool = {
 export function groupNodeModels<T extends Pick<NodeAiModel, "providerId" | "providerLabel">>(models: readonly T[]) {
   return [...Map.groupBy(models, item => item.providerId)].map(([id, items]) => ({
     id, label: items[0]!.providerLabel, models: items,
-  })).sort((left, right) => Number(right.id === "tfRouter") - Number(left.id === "tfRouter"));
+  })).sort((left, right) => Number(right.id === "agnesAi") - Number(left.id === "agnesAi"));
 }
 
 async function readResult<T>(response: Response): Promise<T> {

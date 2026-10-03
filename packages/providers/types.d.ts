@@ -97,6 +97,8 @@ interface ProviderTools {
    * @example const ffmpeg = await this.tool.ffmpeg(); const command = ffmpeg("assets/input.mp4").videoCodec("libx264");
    */
   ffmpeg(): Promise<import("@toonflow/ffmpeg/types").FfmpegFactory>;
+  /** 上报生成进度、状态与限频冷却剩余时间。 */
+  reportProgress?(update: { state: string; message: string; progress?: number; cooldownRemaining?: number }): void;
 }
 
 interface ImageRequest extends MediaRequest {

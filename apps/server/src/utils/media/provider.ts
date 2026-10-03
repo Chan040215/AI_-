@@ -320,12 +320,13 @@ export async function deleteMediaProvider(fileName: string, revision: string) {
   } finally { release(); }
 }
 
-export async function loadMediaProviderSource(source: string, config: Record<string, unknown> = {}, signal?: AbortSignal, fetchRequest = fetch, cwd?: string) {
+export async function loadMediaProviderSource(source: string, config: Record<string, unknown> = {}, signal?: AbortSignal, fetchRequest = fetch, cwd?: string, onProgress?: (update: { state: string; message: string; progress?: number; cooldownRemaining?: number }) => void) {
   signal?.throwIfAborted();
   const { id } = parseProvider(source);
   // ACT: VM 只隔离可信供应商的全局上下文；不可信代码需要独立进程等更强隔离。
   const context = createContext({
     Buffer, URL, URLSearchParams, TextEncoder, TextDecoder, Blob,
+    FormData, fetch, console,
     AbortController, AbortSignal, setTimeout, clearTimeout,
   }, { codeGeneration: { strings: false, wasm: false } });
   const rejectImport = () => { throw new Error("供应商不能导入模块，请使用 this.tool 中的宿主工具"); };
@@ -357,6 +358,9 @@ export async function loadMediaProviderSource(source: string, config: Record<str
       ffmpeg: async () => {
         if (!cwd) throw new Error("当前操作没有工作目录，无法使用 FFmpeg");
         return createWorkspaceFfmpeg(cwd, signal);
+      },
+      reportProgress: (update: { state: string; message: string; progress?: number; cooldownRemaining?: number }) => {
+        onProgress?.(update);
       },
     } satisfies ProviderTools,
   };
