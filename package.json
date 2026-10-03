@@ -35,15 +35,15 @@
     "publish:update": "bun run apps/updateServer/scripts/publish.ts",
     "start:server": "bun run --cwd apps/server start",
     "build:server": "bun apps/server/scripts/buildStandalone.ts",
-    "build": "bun run build:tools && bun run --filter '@toonflow/web' --filter '@toonflow/server' build",
-    "build:nodes": "bun run --filter '@toonflow/node-*' build",
+    "build": "bun scripts/buildTools.ts && bun run --cwd apps/web build && bun run --cwd apps/server build",
+    "build:nodes": "bun scripts/buildNodes.ts",
     "build:desktop": "bun run --filter '@toonflow/desktop' build",
     "build:mcp": "bun run --filter '@toonflow/mcp' build",
-    "build:teams": "bun run --filter '@toonflow/team-*' build",
+    "build:teams": "bun scripts/buildTeams.ts",
     "package:desktop": "bun run --filter '@toonflow/desktop' package",
     "release:desktop": "bun run apps/desktop/scripts/release.ts",
     "typecheck": "bun run --filter '@toonflow/*' typecheck",
-    "build:tools": "bun run --filter '@toonflow/tool-*' build"
+    "build:tools": "bun scripts/buildTools.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.4.2",
